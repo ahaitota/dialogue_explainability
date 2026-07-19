@@ -1,0 +1,7 @@
+[project]
+name = "dialogue-explainability"
+version = "0.1.0"
+description = "Explanability in Dialogue Response Generation with LLMs"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = []
