@@ -2,11 +2,14 @@
 import argparse
 import logging
 
+from dotenv import load_dotenv
+
 from dialexp.config import load_config
 from dialexp.inference import run_step_a
 
 
 def main() -> None:
+    load_dotenv()
     parser = argparse.ArgumentParser(description="Run Step A dialogue response generation")
     parser.add_argument("config", help="Path to the experiment YAML config")
     parser.add_argument("--subset", choices=["dev"], help="Override subset (dev = first dev_size examples)")
