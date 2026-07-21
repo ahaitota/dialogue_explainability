@@ -43,9 +43,9 @@ class HFClient:
         self.model_id = model_id
         self.decoding = decoding or {}
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
-        torch_dtype = getattr(torch, _DTYPES.get(dtype, "bfloat16"))
+        model_dtype = getattr(torch, _DTYPES.get(dtype, "bfloat16"))
         self.model = AutoModelForCausalLM.from_pretrained(
-            model_id, torch_dtype=torch_dtype, device_map=device,
+            model_id, dtype=model_dtype, device_map=device,
         )
         self.model.eval()
 
