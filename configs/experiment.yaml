@@ -1,0 +1,38 @@
+# Step A experiment config (project side). Generation is separate & tool-agnostic
+# (see docs/project_structure.md). Tools — including the custom arithmetic tools —
+# are injected here at inference time. All inference runs through HuggingFace.
+
+model: Qwen/Qwen3.5-4B   # HF model id — one model, shared by every step
+dtype: bfloat16                   # bfloat16 | float16 | float32
+device: cuda                      # transformers device_map (auto | cpu | cuda | mps)
+
+tasks:
+  - train_ticket_price
+  - accommodation_price
+  - restaurants_opening_hours
+
+setups:
+  - dialogue                      # tool-use condition
+  - dialogue-no-tools             # no-Python-script condition
+
+# false = vanilla tools only (run this first). Flip to true for the second,
+# custom-tools condition. Only affects tool setups (dialogue); no-tools stays empty.
+include_arithmetic_tools: false
+
+subset: dev                       # null = full data; dev = first dev_size examples
+dev_size: 10
+
+decoding:
+  temperature: 0.0                # greedy
+  max_new_tokens: 2048
+
+max_tool_iterations: 10
+
+paths:
+  benchmark_dir: data/benchmark          # frozen seed-42 sets generated into the project
+  results_dir: results/step_a
+  db_dir: boulder/data/db
+
+parser:
+  enabled: false                  # parse answers with the same HFClient after generation
+  model: null                     # null = reuse the main model above
