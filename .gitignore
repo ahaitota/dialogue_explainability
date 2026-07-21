@@ -8,3 +8,15 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Internal GitHub files
+.github/
+
+# Tool generated files
+.ruff_cache/
+
+# Documentation
+docs/
+
+# Data files
+data/
