@@ -3,5 +3,45 @@ name = "dialogue-explainability"
 version = "0.1.0"
 description = "Explanability in Dialogue Response Generation with LLMs"
 readme = "README.md"
-requires-python = ">=3.14"
-dependencies = []
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    # BOULDER submodule runtime deps (the project reuses its tools, DBs and handler).
+    # `ollama` stays only because boulder's modules import it at load time; the
+    # project itself runs all inference through HuggingFace (see src/dialexp/hf_client.py).
+    "astral>=3.2",
+    "httpx>=0.28.1",
+    "jinja2>=3.1.6",
+    "numpy>=1.26.1",
+    "ollama>=0.5.2",
+    "pandas>=2.3.1",
+    "ppi-python>=0.2.3",
+    "pydantic>=2.11.7",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0.1",
+    "requests>=2.31.0",
+    "scipy>=1.14.1",
+    # HuggingFace inference stack (all project inference: Step A, ask-why, B*, Step C, parsing).
+    "accelerate>=0.34",
+    "torch>=2.2",
+    "transformers>=4.45",
+]
+
+[tool.uv]
+# ppi-python (boulder's PPI bias-correction dep) declares `numba` unpinned; uv
+# backtracks to numba 0.53.1, which has no wheels for Python 3.12. Constrain the
+# transitive numba/llvmlite to versions that ship 3.12 wheels.
+constraint-dependencies = ["numba>=0.61", "llvmlite>=0.44"]
+
+[tool.setuptools.packages.find]
+# `src` exposes the project package (dialexp); `boulder` exposes the submodule's
+# inner `boulder` package as a top-level import without modifying the submodule.
+where = ["src", "boulder"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.22",
+]
