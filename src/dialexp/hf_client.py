@@ -9,9 +9,11 @@ loop). Ollama/OpenRouter are not used anywhere in the project.
 `LLMResult`, so it is a drop-in wherever a BOULDER client was expected (it still
 uses BOULDER's `create_tool_handler` to execute and record tool calls).
 
-Tool-call parsing targets the `<tool_call>{...}</tool_call>` convention emitted
-by Qwen/Hermes-style chat templates (the project's chosen models), with a fenced
-/ bare-JSON fallback. Reasoning is extracted from `<think>...</think>` spans.
+Tool-call parsing handles both the Qwen3.5 XML convention
+(`<tool_call><function=NAME><parameter=KEY>VALUE</parameter></function></tool_call>`)
+and the JSON convention (`<tool_call>{"name": ..., "arguments": {...}}</tool_call>`)
+emitted by Hermes-style chat templates. Reasoning is extracted from
+`<think>...</think>` spans.
 """
 from __future__ import annotations
 
@@ -23,7 +25,9 @@ from typing import Any, Callable
 from boulder.llm.clients import LLMResult
 from boulder.response_parser import ResponseParser
 
-_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
+_FUNCTION_RE = re.compile(r"<function=([^>\s]+)\s*>(.*?)</function>", re.DOTALL)
+_PARAMETER_RE = re.compile(r"<parameter=([^>\s]+)\s*>(.*?)</parameter>", re.DOTALL)
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 _DTYPES = {"bfloat16": "bfloat16", "float16": "float16", "float32": "float32"}
 
@@ -106,15 +110,46 @@ class HFClient:
 
     # ---- parsing helpers -------------------------------------------------
     @staticmethod
+    def _coerce(value: str) -> Any:
+        value = value.strip()
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            return value
+
+    @staticmethod
     def _parse_tool_calls(text: str) -> list[dict]:
+        blocks = _TOOL_CALL_RE.findall(text)
+        # Some models emit bare <function=...> without a <tool_call> wrapper.
+        if not blocks and "<function=" in text:
+            blocks = [text]
+
         calls: list[dict] = []
-        for match in _TOOL_CALL_RE.finditer(text):
-            try:
-                obj = json.loads(match.group(1))
-            except json.JSONDecodeError:
-                continue
-            name = obj.get("name")
-            arguments = obj.get("arguments", obj.get("parameters", {}))
+        for block in blocks:
+            block = block.strip()
+            name: str | None = None
+            arguments: dict = {}
+
+            if block.startswith("{"):
+                # JSON convention: {"name": ..., "arguments": {...}}.
+                try:
+                    obj = json.loads(block)
+                except json.JSONDecodeError:
+                    continue
+                name = obj.get("name")
+                arguments = obj.get("arguments", obj.get("parameters", {})) or {}
+            else:
+                # Qwen3.5 XML convention:
+                # <function=NAME><parameter=KEY>VALUE</parameter>...</function>
+                fmatch = _FUNCTION_RE.search(block)
+                if not fmatch:
+                    continue
+                name = fmatch.group(1)
+                arguments = {
+                    key: HFClient._coerce(val)
+                    for key, val in _PARAMETER_RE.findall(fmatch.group(2))
+                }
+
             if name:
                 calls.append({
                     "id": str(uuid.uuid4()),
