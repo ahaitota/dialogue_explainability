@@ -23,3 +23,6 @@ docs/
 
 # Data files
 data/
+
+# Results
+results/
