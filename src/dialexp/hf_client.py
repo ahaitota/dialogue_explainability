@@ -125,11 +125,17 @@ class HFClient:
 
     @staticmethod
     def _split_reasoning(text: str) -> tuple[str, str | None]:
+        # Explicit <think>...</think> span anywhere in the text.
         match = _THINK_RE.search(text)
         if match:
             reasoning = match.group(1).strip()
             content = _THINK_RE.sub("", text).strip()
             return content, reasoning
+        # Thinking models whose chat template already opened <think> in the prompt
+        # emit only the closing </think>: everything before it is the reasoning.
+        if "</think>" in text:
+            reasoning, _, content = text.partition("</think>")
+            return content.strip(), reasoning.strip()
         return text.strip(), None
 
 
