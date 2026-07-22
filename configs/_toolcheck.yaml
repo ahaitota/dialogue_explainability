@@ -1,0 +1,29 @@
+model: Qwen/Qwen3.5-4B
+dtype: bfloat16
+device: auto
+
+tasks:
+  - train_ticket_price
+
+setups:
+  - dialogue
+
+include_arithmetic_tools: true
+
+subset: dev
+dev_size: 5
+
+decoding:
+  temperature: 0.0
+  max_new_tokens: 2048
+
+max_tool_iterations: 10
+
+paths:
+  benchmark_dir: data/benchmark
+  results_dir: results/_toolcheck
+  db_dir: boulder/data/db
+
+parser:
+  enabled: false
+  model: null
