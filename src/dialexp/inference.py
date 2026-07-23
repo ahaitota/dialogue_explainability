@@ -59,7 +59,9 @@ def run_step_a(config: Config) -> None:
         for setup_id, dialogue_template, _is_dialogue in selected_setups:
             out_path = config.result_path(task_name, setup_id)
             if out_path.exists():
-                logger.info("skip (exists): %s", out_path)
+                logger.warning(
+                    "SKIP (exists): %s — delete the file to regenerate", out_path,
+                )
                 continue
 
             tools = build_tools_for_setup(
