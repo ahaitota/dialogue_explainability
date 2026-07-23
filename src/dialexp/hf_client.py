@@ -102,6 +102,12 @@ class HFClient:
             "max_new_tokens": int(self.decoding.get("max_new_tokens", 2048)),
             "pad_token_id": self.tokenizer.pad_token_id or self.tokenizer.eos_token_id,
         }
+        # Deterministic anti-repetition: penalises already-generated tokens to break
+        # greedy repetition loops without introducing sampling (kept identical across
+        # all runs/setups so paired comparisons stay comparable).
+        repetition_penalty = float(self.decoding.get("repetition_penalty", 1.0))
+        if repetition_penalty != 1.0:
+            kwargs["repetition_penalty"] = repetition_penalty
         if temperature > 0:
             kwargs.update(do_sample=True, temperature=temperature)
         else:

@@ -25,6 +25,7 @@ dev_size: 10
 decoding:
   temperature: 0.0                # greedy
   max_new_tokens: 2048
+  repetition_penalty: 1.2         # >1 discourages repeats; deterministic, breaks loops
 
 max_tool_iterations: 10
 
