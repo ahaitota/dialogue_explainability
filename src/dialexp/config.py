@@ -31,6 +31,13 @@ class Config:
         "prompt": "Why did you give that answer? Please explain your reasoning.",
         "results_dir": "results/ask_why",
     })
+    # Step B masking reruns (B3 context masking, B4 logic masking)
+    masks: dict = field(default_factory=lambda: {
+        "context": "configs/masks/context_masks.yaml",
+        "logic": "configs/masks/logic_masks.yaml",
+        "context_results_dir": "results/context_masking",
+        "logic_results_dir": "results/logic_masking",
+    })
 
     def benchmark_path(self, task: str) -> Path:
         return Path(self.paths["benchmark_dir"]) / f"{task}.json"
@@ -42,6 +49,14 @@ class Config:
     def ask_why_path(self, task: str, setup: str) -> Path:
         model_name = self.model.split("/")[-1]
         return Path(self.ask_why["results_dir"]) / f"{task}-{model_name}-{setup}.jsonl"
+
+    def context_masking_path(self, task: str, setup: str, tag: str) -> Path:
+        model_name = self.model.split("/")[-1]
+        return Path(self.masks["context_results_dir"]) / f"{task}-{model_name}-{setup}-{tag}.jsonl"
+
+    def logic_masking_path(self, task: str, tag: str) -> Path:
+        model_name = self.model.split("/")[-1]
+        return Path(self.masks["logic_results_dir"]) / f"{task}-{model_name}-dialogue-{tag}.jsonl"
 
 
 def load_config(path: str | Path) -> Config:

@@ -1,0 +1,17 @@
+# B3 Context Masking — per-task metadata fields whose VALUE is removed from the
+# user turns before inference is rerun (Terentowicz et al., 2025).
+#
+# Each entry is a dotted path into a benchmark example's metadata. Per example the
+# value (e.g. "gastropub") is located case-insensitively in the user turns and
+# removed; the rerun answer is compared to the Step A answer. Values that don't
+# appear verbatim (e.g. area "centre" paraphrased as "central") are recorded as
+# not-found and skipped for that example — no hand-picked keywords, fully derived.
+train_ticket_price:
+  - trains_params.departure
+  - trains_params.weekday
+accommodation_price:
+  - hotel_params.hotel_type
+  - hotel_params.pricerange
+restaurants_opening_hours:
+  - restaurant_params.food
+  - restaurant_params.area
