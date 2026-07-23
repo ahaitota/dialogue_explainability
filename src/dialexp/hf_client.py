@@ -52,6 +52,7 @@ class HFClient:
             model_id, dtype=model_dtype, device_map=device,
         )
         self.model.eval()
+        self._eos_ids = self._collect_eos_ids()
 
     # ---- generation ------------------------------------------------------
     def chat(
@@ -68,8 +69,9 @@ class HFClient:
         tool_calls_made: list[dict] = []
 
         text = ""
+        finish_reason = "stop"
         for iteration in range(max_tool_iterations + 1):
-            text = self._generate(messages, tool_schemas)
+            text, finish_reason = self._generate(messages, tool_schemas)
             calls = self._parse_tool_calls(text)
             can_loop = tool_schemas and tool_handler and calls and iteration < max_tool_iterations
             if not can_loop:
@@ -79,9 +81,13 @@ class HFClient:
                 tool_calls_made.append({"name": name, "arguments": args, "result": result})
 
         content, reasoning = self._split_reasoning(text)
-        return LLMResult(content=content, reasoning=reasoning, tool_calls_made=tool_calls_made)
+        llm_result = LLMResult(content=content, reasoning=reasoning, tool_calls_made=tool_calls_made)
+        # "length" = the final generation hit max_new_tokens (truncated) instead of
+        # stopping naturally; recorded per row so truncated pairs can be excluded.
+        llm_result.finish_reason = finish_reason
+        return llm_result
 
-    def _generate(self, messages: list[dict], tool_schemas: list[dict] | None) -> str:
+    def _generate(self, messages: list[dict], tool_schemas: list[dict] | None) -> tuple[str, str]:
         torch = self._torch
         inputs = self.tokenizer.apply_chat_template(
             messages,
@@ -91,10 +97,28 @@ class HFClient:
             return_dict=True,
         )
         inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        gen_kwargs = self._gen_kwargs()
         with torch.no_grad():
-            output = self.model.generate(**inputs, **self._gen_kwargs())
+            output = self.model.generate(**inputs, **gen_kwargs)
         new_tokens = output[0, inputs["input_ids"].shape[-1]:]
-        return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
+        finish_reason = self._finish_reason(new_tokens, gen_kwargs["max_new_tokens"])
+        return self.tokenizer.decode(new_tokens, skip_special_tokens=True), finish_reason
+
+    def _collect_eos_ids(self) -> set[int]:
+        ids: set[int] = set()
+        for source in (self.tokenizer.eos_token_id, getattr(self.model.generation_config, "eos_token_id", None)):
+            if isinstance(source, (list, tuple)):
+                ids.update(int(i) for i in source)
+            elif source is not None:
+                ids.add(int(source))
+        return ids
+
+    def _finish_reason(self, new_tokens, max_new_tokens: int) -> str:
+        # Natural stop tokens appear before the cap; only a run that reached the cap
+        # without ending on a stop token was actually truncated.
+        if len(new_tokens) >= max_new_tokens and int(new_tokens[-1]) not in self._eos_ids:
+            return "length"
+        return "stop"
 
     def _gen_kwargs(self) -> dict[str, Any]:
         temperature = float(self.decoding.get("temperature", 0.0))

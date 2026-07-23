@@ -92,6 +92,7 @@ def run_step_a(config: Config) -> None:
                     "messages": chat_messages,
                     "cot": result.reasoning,
                     "response": result.content,
+                    "finish_reason": getattr(result, "finish_reason", None),
                     "target": targets,
                     "tool_calls": result.tool_calls_made,
                     "parser_enum": parser_enum,
