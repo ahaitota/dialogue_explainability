@@ -14,10 +14,9 @@ from __future__ import annotations
 import json
 import logging
 
-from boulder.inference import parse_results
-
 from dialexp.config import Config
 from dialexp.hf_client import HFClient, HFResponseParser
+from dialexp.inference import parse_results
 
 logger = logging.getLogger(__name__)
 

@@ -1,4 +1,13 @@
-"""Step A — dialogue response generation (project side, HuggingFace-only).
+"""Core inference stage (Step A) and the project's single bridge to BOULDER's
+inference primitives.
+
+`run_step_a` generates the canonical `results/step_a/*.jsonl` that every later
+stage consumes. This module is also the **one place** that imports from
+`boulder.inference` and re-exports those helpers (`build_chat_messages`,
+`get_prompt_templates`, `load_datasets`, `extract_targets`, `parse_results`), so
+other stages (ask-why, parsing, the B3/B4 reruns) import them from
+`dialexp.inference` rather than reaching into BOULDER directly — one swap point if
+BOULDER's API changes.
 
 Reuses BOULDER's prompt construction, tool handler and response-parser logic; the
 model backend is the project's unified `HFClient` (the same engine every step
