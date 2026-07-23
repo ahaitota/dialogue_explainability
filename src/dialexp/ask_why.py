@@ -27,10 +27,11 @@ def _load_rows(path: Path) -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
-def run_ask_why(config: Config) -> None:
-    client = HFClient(
-        config.model, dtype=config.dtype, device=config.device, decoding=config.decoding,
-    )
+def run_ask_why(config: Config, client: HFClient | None = None) -> None:
+    if client is None:
+        client = HFClient(
+            config.model, dtype=config.dtype, device=config.device, decoding=config.decoding,
+        )
     why_prompt = config.ask_why["prompt"]
 
     for task_name in config.tasks:

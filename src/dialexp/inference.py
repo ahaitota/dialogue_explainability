@@ -31,10 +31,11 @@ def _select_examples(config: Config, examples: list[dict]) -> list[dict]:
     return examples
 
 
-def run_step_a(config: Config) -> None:
-    client = HFClient(
-        config.model, dtype=config.dtype, device=config.device, decoding=config.decoding,
-    )
+def run_step_a(config: Config, client: HFClient | None = None) -> None:
+    if client is None:
+        client = HFClient(
+            config.model, dtype=config.dtype, device=config.device, decoding=config.decoding,
+        )
 
     parser = None
     if config.parser.get("enabled"):
