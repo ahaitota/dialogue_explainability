@@ -16,7 +16,7 @@ setups:
 
 # false = vanilla tools only (run this first). Flip to true for the second,
 # custom-tools condition. Only affects tool setups (dialogue); no-tools stays empty.
-include_arithmetic_tools: false
+include_arithmetic_tools: true
 
 subset: dev                       # null = full data; dev = first dev_size examples
 dev_size: 10
@@ -34,7 +34,7 @@ paths:
   db_dir: boulder/data/db
 
 parser:
-  enabled: false                  # parse answers with the same HFClient after generation
+  enabled: true                  # parse answers with the same HFClient after generation
   model: null                     # null = reuse the main model above
 
 ask_why:

@@ -24,6 +24,7 @@ dependencies = [
     "accelerate>=0.34",
     "torch>=2.2",
     "transformers>=4.45",
+    "matplotlib>=3.11.1",
 ]
 
 [tool.uv]
