@@ -26,6 +26,11 @@ class Config:
     })
     # parse answers after generation with the same HFClient (null model = reuse the main model)
     parser: dict = field(default_factory=lambda: {"enabled": False, "model": None})
+    # ask-why baseline
+    ask_why: dict = field(default_factory=lambda: {
+        "prompt": "Why did you give that answer? Please explain your reasoning.",
+        "results_dir": "results/ask_why",
+    })
 
     def benchmark_path(self, task: str) -> Path:
         return Path(self.paths["benchmark_dir"]) / f"{task}.json"
@@ -33,6 +38,10 @@ class Config:
     def result_path(self, task: str, setup: str) -> Path:
         model_name = self.model.split("/")[-1]
         return Path(self.paths["results_dir"]) / f"{task}-{model_name}-{setup}.jsonl"
+
+    def ask_why_path(self, task: str, setup: str) -> Path:
+        model_name = self.model.split("/")[-1]
+        return Path(self.ask_why["results_dir"]) / f"{task}-{model_name}-{setup}.jsonl"
 
 
 def load_config(path: str | Path) -> Config:

@@ -1,5 +1,4 @@
-# Step A experiment config (project side). Generation is separate & tool-agnostic
-# (see docs/project_structure.md). Tools — including the custom arithmetic tools —
+# Step A experiment config (project side). Tools — including the custom arithmetic tools —
 # are injected here at inference time. All inference runs through HuggingFace.
 
 model: Qwen/Qwen3.5-4B   # HF model id — one model, shared by every step
@@ -37,3 +36,8 @@ paths:
 parser:
   enabled: false                  # parse answers with the same HFClient after generation
   model: null                     # null = reuse the main model above
+
+ask_why:
+  # question -> answer -> "why?" and asks the same model to justify its answer.
+  prompt: "Why did you give that answer? Please explain your reasoning."
+  results_dir: results/ask_why
