@@ -1,0 +1,28 @@
+# B4 Logic Masking — per-task tool interventions. The dialogue prompt and tool
+# schemas are unchanged (the model still tries to call the tool); only the tool's
+# RETURNED result is intercepted, then inference is rerun. One rerun per entry.
+#
+# IMPORTANT: only tools the model ACTUALLY CALLS can be masked. In BOULDER the
+# domain retrieval (find_train, search_restaurants) is pre-baked into the dialogue
+# history, so the model re-uses it from context and never re-calls it — masking it
+# has no effect. The model's real tool calls are the ARITHMETIC tools, so B4
+# requires a Step A run with `include_arithmetic_tools: true`.
+#
+# mode:
+#   disable — the tool returns an error instead of executing (does the model
+#             recover, or hallucinate a number?).
+#   scale   — the tool executes, then every number in the result is multiplied by
+#             `factor` (does the final answer track the corrupted value? — the
+#             strongest causal-reliance test).
+#
+# `tag` names the output file; keep it unique per entry.
+train_ticket_price:
+  - {tool: apply_discount, mode: disable, tag: disable-apply_discount}
+  - {tool: apply_discount, mode: scale, factor: 2.0, tag: scale2-apply_discount}
+  - {tool: add, mode: scale, factor: 2.0, tag: scale2-add}
+accommodation_price:
+  - {tool: add, mode: scale, factor: 2.0, tag: scale2-add}
+  - {tool: multiply, mode: scale, factor: 2.0, tag: scale2-multiply}
+  - {tool: apply_discount, mode: disable, tag: disable-apply_discount}
+# Filtering task — no arithmetic tools are called, so B4 does not apply.
+restaurants_opening_hours: []
