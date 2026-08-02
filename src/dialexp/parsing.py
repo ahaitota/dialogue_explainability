@@ -37,7 +37,7 @@ def _answer_type(path) -> str:
     raise ValueError(f"empty results file: {path}")
 
 
-def run_parser(config: Config, force: bool = False) -> None:
+def run_parser(config: Config, force: bool = False, client: HFClient | None = None) -> None:
     todo = []
     for task_name in config.tasks:
         for setup_id in config.setups:
@@ -56,11 +56,12 @@ def run_parser(config: Config, force: bool = False) -> None:
         logger.info("nothing to parse")
         return
 
-    # Only load the (expensive) model once we know there is work to do.
+    # Only load the model once.
     parser_model = config.parser.get("model")
-    client = HFClient(
-        config.model, dtype=config.dtype, device=config.device, decoding=config.decoding,
-    )
+    if client is None:
+        client = HFClient(
+            config.model, dtype=config.dtype, device=config.device, decoding=config.decoding,
+        )
     parser_client = (
         client if not parser_model or parser_model == config.model
         else HFClient(parser_model, dtype=config.dtype, device=config.device, decoding=config.decoding)
