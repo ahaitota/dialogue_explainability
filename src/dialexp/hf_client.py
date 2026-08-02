@@ -31,6 +31,28 @@ _PARAMETER_RE = re.compile(r"<parameter=([^>\s]+)\s*>(.*?)</parameter>", re.DOTA
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 _DTYPES = {"bfloat16": "bfloat16", "float16": "float16", "float32": "float32"}
 
+# searches for a "total" phrase followed by a currency amount (ex "Total: $101.24")
+_TOTAL_AMOUNT_RE = re.compile(r"total[^\n£$]{0,40}[£$]\s*([\d,]+\.?\d*)", re.IGNORECASE)
+# searches for a **bold** currency amount (ex "**$17.10**")
+_BOLD_AMOUNT_RE = re.compile(r"\*\*[^*\n]*?[£$]\s*([\d,]+\.?\d*)[^*\n]*?\*\*")
+
+def amount_fallback(text: str | None) -> float | None:
+    """Manually recover a final total from an amount response when the LLM parser fails.
+
+    Relies only on a clear cue — an amount right after a "total" phrase, else the last
+    **bold** currency amount.
+    """
+    if not text:
+        return None
+    for regex in (_TOTAL_AMOUNT_RE, _BOLD_AMOUNT_RE):
+        matches = regex.findall(text)
+        if matches:
+            try:
+                return float(matches[-1].replace(",", ""))
+            except ValueError:
+                continue
+    return None
+
 
 class HFClient:
     def __init__(
@@ -215,6 +237,14 @@ class HFResponseParser(ResponseParser):
         self.hf = hf_client
         self.temperature = 0.0
         self.retries = retries
+
+    def parse_answer(self, answer, answer_type, context=None):
+        # Deterministic fallback for amount tasks when the LLM parser returns None
+        # (recovers a clearly-stated total; leaves genuine non-answers as None).
+        result = super().parse_answer(answer, answer_type, context=context)
+        if result is None and answer_type == "amount":
+            return amount_fallback(answer)
+        return result
 
     def _parse_with_llm(self, prompt: str, json_field: str | None = None):
         messages = [{"role": "user", "content": prompt}]
