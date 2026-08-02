@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from pathlib import Path
 
 # Text fields rendered as their own section (label, key, collapsed?).
@@ -81,7 +82,12 @@ def render_row(row: dict) -> str:
     messages = row.get("messages")
     if isinstance(messages, list):
         lines += _render_conversation(messages)
-        if row.get("_conversation_from_step_a"):
+        if row.get("_conversation_masked"):
+            lines.append(
+                f'_(Step A conversation with "{row["_conversation_masked"]}" removed from the '
+                "user turns — the exact input B3 fed the model)_\n",
+            )
+        elif row.get("_conversation_from_step_a"):
             lines.append("_(conversation shown from the matching Step A row)_\n")
 
     for label, key, collapsed in _TEXT_FIELDS:
@@ -120,6 +126,20 @@ def render_row(row: dict) -> str:
     return "\n".join(lines)
 
 
+def _mask_user_turns(messages: list, value: str) -> list:
+    """Delete whole-word, case-insensitive `value` from user turns (mirrors B3's
+    `mask_value_in_messages`), so the viewer shows the exact masked B3 input."""
+    pattern = re.compile(rf"\b{re.escape(value)}\b", re.IGNORECASE)
+    masked = []
+    for message in messages:
+        if message.get("role") == "user" and message.get("content"):
+            content, n = pattern.subn("", message["content"])
+            if n:
+                message = {**message, "content": re.sub(r"\s{2,}", " ", content).strip()}
+        masked.append(message)
+    return masked
+
+
 def _attach_conversations(rows: list[dict], step_a_dir: Path) -> None:
     """For rows without `messages`, pull the conversation from the matching Step A
     row (same task/model/setup/id), so every stage's view shows the input."""
@@ -143,6 +163,12 @@ def _attach_conversations(rows: list[dict], step_a_dir: Path) -> None:
             cache[key] = index
         messages = cache[key].get(row["id"])
         if messages:
+            # B3 rows carry the masked word but not the masked messages — apply the
+            # same removal here so the view matches what the model actually saw.
+            masked_value = row.get("masked_value")
+            if masked_value and row.get("found"):
+                messages = _mask_user_turns(messages, masked_value)
+                row["_conversation_masked"] = masked_value
             row["messages"] = messages
             row["_conversation_from_step_a"] = True
 
