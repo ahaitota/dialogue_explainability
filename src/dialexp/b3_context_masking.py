@@ -154,7 +154,8 @@ def run_b3(config: Config, client: HFClient | None = None) -> None:
                         "finish_reason": getattr(result, "finish_reason", None),
                         "tool_calls": result.tool_calls_made,
                         "parsed_answer": rerun_parsed,
-                        "answer_changed": (rerun_parsed != ref_parsed) if ref_parsed is not None else None,
+                        "answer_changed": (rerun_parsed != ref_parsed)
+                        if ref_parsed is not None and rerun_parsed is not None else None,
                     })
 
                 out_path.parent.mkdir(parents=True, exist_ok=True)

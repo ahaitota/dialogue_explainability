@@ -109,7 +109,8 @@ def run_b4(config: Config, client: HFClient | None = None) -> None:
                     "tool_calls": result.tool_calls_made,
                     "parsed_answer": rerun_parsed,
                     "ref_parsed_answer": ref_parsed,
-                    "answer_changed": (rerun_parsed != ref_parsed) if ref_parsed is not None else None,
+                    "answer_changed": (rerun_parsed != ref_parsed)
+                    if ref_parsed is not None and rerun_parsed is not None else None,
                     "target": ref.get("target"),
                 })
 
