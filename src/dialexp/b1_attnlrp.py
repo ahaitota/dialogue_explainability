@@ -78,7 +78,7 @@ def _attribute_example(model, tokenizer, row: dict, max_answer_tokens: int | Non
     response = row.get("response") or ""
 
     prompt_ids = tokenizer.apply_chat_template(
-        messages, add_generation_prompt=True, return_tensors="pt",
+        messages, add_generation_prompt=True, return_tensors="pt", return_dict=False,
     ).to(model.device)
     # join reasoning + </think> + answer (Step A stored them separately)
     reasoning_prefix = f"{cot}\n</think>\n\n" if cot else ""
