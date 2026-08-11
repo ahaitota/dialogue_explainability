@@ -67,6 +67,10 @@ def _build_model(config: Config):
     # LXT has no built-in map for Qwen3.5 - have to use custom patch map (see _lxt_qwen3_5_patch.py)
     patch_map = _build_qwen3_5_patch_map() if module.__name__ == _QWEN3_5_MODULE else None
     monkey_patch(module, patch_map=patch_map, verbose=False)
+    # gradient checkpointing trades compute for memory: recomputes activations during
+    # backward instead of keeping them all resident
+    model.gradient_checkpointing_enable()
+    model.train()
     return model, tokenizer
 
 
