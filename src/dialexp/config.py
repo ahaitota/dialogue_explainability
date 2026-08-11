@@ -38,6 +38,12 @@ class Config:
         "context_results_dir": "results/context_masking",
         "logic_results_dir": "results/logic_masking",
     })
+    # B1 AttnLRP (attention saliency) — pilot-oriented (1 backward pass / token)
+    b1: dict = field(default_factory=lambda: {
+        "results_dir": "results/attnlrp",
+        "max_examples": 3,           # examples per (task, setup) — keep small
+        "max_answer_tokens": None,   # None = explain the whole answer (no cap)
+    })
 
     def benchmark_path(self, task: str) -> Path:
         return Path(self.paths["benchmark_dir"]) / f"{task}.json"
@@ -57,6 +63,10 @@ class Config:
     def logic_masking_path(self, task: str, tag: str) -> Path:
         model_name = self.model.split("/")[-1]
         return Path(self.masks["logic_results_dir"]) / f"{task}-{model_name}-dialogue-{tag}.jsonl"
+
+    def b1_path(self, task: str, setup: str) -> Path:
+        model_name = self.model.split("/")[-1]
+        return Path(self.b1["results_dir"]) / f"{task}-{model_name}-{setup}.jsonl"
 
 
 def load_config(path: str | Path) -> Config:

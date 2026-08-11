@@ -41,3 +41,9 @@ ask_why:
   # question -> answer -> "why?" and asks the same model to justify its answer.
   prompt: "Why did you give that answer? Please explain your reasoning."
   results_dir: results/ask_why
+
+b1:
+  # AttnLRP attention-saliency 
+  results_dir: results/attnlrp
+  max_examples: 10         
+  max_answer_tokens: null  # null = explain the whole answer, set an int to cap for speed
