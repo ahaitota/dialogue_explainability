@@ -50,6 +50,8 @@ def _build_model(config: Config):
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from dialexp._lxt_compat import monkey_patch
+    from dialexp._lxt_qwen3_5_patch import MODULE_NAME as _QWEN3_5_MODULE
+    from dialexp._lxt_qwen3_5_patch import build_patch_map as _build_qwen3_5_patch_map
 
     tokenizer = AutoTokenizer.from_pretrained(config.model)
     dtype = getattr(torch, _DTYPES.get(config.dtype, "bfloat16"))
@@ -61,7 +63,10 @@ def _build_model(config: Config):
     for param in model.parameters():
         param.requires_grad_(False)
     # patches backward() to compute AttnLRP relevance instead of gradients
-    monkey_patch(importlib.import_module(type(model).__module__), verbose=False)
+    module = importlib.import_module(type(model).__module__)
+    # LXT has no built-in map for Qwen3.5 - have to use custom patch map (see _lxt_qwen3_5_patch.py)
+    patch_map = _build_qwen3_5_patch_map() if module.__name__ == _QWEN3_5_MODULE else None
+    monkey_patch(module, patch_map=patch_map, verbose=False)
     return model, tokenizer
 
 
