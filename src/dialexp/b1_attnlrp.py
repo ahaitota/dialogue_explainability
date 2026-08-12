@@ -119,6 +119,7 @@ def _attribute_example(model, tokenizer, row: dict, max_answer_tokens: int | Non
     logits = model(inputs_embeds=embeds, use_cache=False).logits
 
     relevance_fracs = []
+    token_frac_sum = torch.zeros(full_ids.shape[1], device=embeds.device)
     for q in explained:
         if q == 0:
             continue
@@ -129,6 +130,7 @@ def _attribute_example(model, tokenizer, row: dict, max_answer_tokens: int | Non
         # Input×Gradient: embedding * its relevance, summed → one score per token
         relevance = (embeds * embeds.grad).sum(-1)[0].float().abs()
         total = float(relevance.sum().item()) or 1.0
+        token_frac_sum += relevance / total
         # split relevance by region: prompt / reasoning / answer-so-far
         prompt_mass = float(relevance[:n_prompt].sum().item())
         reasoning_mass = float(relevance[n_prompt:answer_start].sum().item())
@@ -143,6 +145,14 @@ def _attribute_example(model, tokenizer, row: dict, max_answer_tokens: int | Non
     mean_reasoning = sum(f["reasoning"] for f in relevance_fracs) / n if n else None
     mean_prompt = sum(f["prompt"] for f in relevance_fracs) / n if n else None
     mean_answer = sum(f["answer"] for f in relevance_fracs) / n if n else None
+
+    # per-input-token relevance, averaged over all explained answer tokens (for
+    # rendering a whole-text heatmap; see plots.plot_b1_token_heatmap)
+    from lxt.utils import clean_tokens
+
+    tokens = clean_tokens(tokenizer.convert_ids_to_tokens(full_ids[0])) if n else []
+    token_relevance = [round(v, 5) for v in (token_frac_sum / n).tolist()] if n else []
+
     return {
         "id": row["id"],
         "setup_id": row.get("setup_id"),
@@ -157,6 +167,8 @@ def _attribute_example(model, tokenizer, row: dict, max_answer_tokens: int | Non
         "mean_answer_relevance": mean_answer,
         "reasoning_relevance_per_token": [round(f["reasoning"], 4) for f in relevance_fracs],
         "answer_relevance_per_token": [round(f["answer"], 4) for f in relevance_fracs],
+        "tokens": tokens,
+        "token_relevance": token_relevance,
     }
 
 

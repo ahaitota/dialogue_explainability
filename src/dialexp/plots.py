@@ -7,12 +7,15 @@ it works on the cluster without a display.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import matplotlib
 
 matplotlib.use("Agg")  # headless — no display needed
 import matplotlib.pyplot as plt  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 _HIGHER_IS_BETTER = {"accuracy", "precision"}
 
@@ -100,3 +103,163 @@ def plot_step_a(summary: list[dict], paired: list[dict], out_dir: Path) -> list[
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     return _grouped_bars(summary, out_dir) + _paired_delta(paired, out_dir)
+
+
+def _load_jsonl(path: Path) -> list[dict]:
+    import json
+
+    with open(path) as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def _heatmap(matrix, tasks: list[str], setups: list[str], metric: str, out_dir: Path) -> Path:
+    fig, ax = plt.subplots(figsize=(max(6.0, 1.8 * len(setups) + 3.0), max(3.0, 0.8 * len(tasks) + 1.2)))
+    im = ax.imshow(matrix, cmap="YlOrRd", aspect="auto")
+    ax.set_xticks(range(len(setups)))
+    ax.set_xticklabels(setups, rotation=20, ha="right")
+    ax.set_yticks(range(len(tasks)))
+    ax.set_yticklabels(tasks)
+    for i in range(len(tasks)):
+        for j in range(len(setups)):
+            value = matrix[i][j]
+            if value is not None:
+                ax.text(j, i, f"{value:.2f}", ha="center", va="center", fontsize=9)
+    fig.colorbar(im, ax=ax, label=f"mean {metric} relevance")
+    ax.set_title(f"B1 AttnLRP: mean {metric} relevance by task and setup", fontsize=11)
+    fig.tight_layout()
+
+    path = out_dir / f"attnlrp_{metric}.png"
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
+def plot_b1(config, out_dir: Path | None = None) -> list[Path]:
+    """Task × setup heatmaps of mean prompt/reasoning/answer(self) relevance
+    fractions, read directly from existing results/attnlrp/*.jsonl files."""
+    out_dir = Path(out_dir) if out_dir else Path(config.b1["results_dir"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    tasks = list(config.tasks)
+    setups = list(config.setups)
+    metrics = ["prompt", "reasoning", "answer"]
+    matrices = {metric: [[None] * len(setups) for _ in tasks] for metric in metrics}
+
+    for i, task in enumerate(tasks):
+        for j, setup in enumerate(setups):
+            path = config.b1_path(task, setup)
+            if not path.exists():
+                continue
+            rows = _load_jsonl(path)
+            if not rows:
+                continue
+            for metric in metrics:
+                values = [r[f"mean_{metric}_relevance"] for r in rows if r.get(f"mean_{metric}_relevance") is not None]
+                if values:
+                    matrices[metric][i][j] = sum(values) / len(values)
+
+    return [_heatmap(matrices[metric], tasks, setups, metric, out_dir) for metric in metrics]
+
+
+def plot_b1_token_heatmap(row: dict, out_path: Path, fig_width: float = 11.0, fontsize: int = 9) -> Path:
+    """Whole-text heatmap for one B1 example: every input token (prompt +
+    reasoning + answer) colored by its relevance to the explained answer tokens,
+    wrapped across lines like running text. Rendered directly in matplotlib (no
+    LaTeX/xelatex, unlike LXT's own `lxt.utils.pdf_heatmap`).
+
+    Needs `row["tokens"]` / `row["token_relevance"]`, added to b1_attnlrp's output
+    -- older results (from before this field existed) must be re-run.
+    """
+    import matplotlib as mpl
+    import matplotlib.colors as mcolors
+
+    tokens = row["tokens"]
+    values = row["token_relevance"]
+    n_prompt = row["n_prompt_tokens"]
+    n_reasoning = row["n_reasoning_tokens"]
+
+    # mark region boundaries as plain (uncolored) labels inline with the text
+    items: list[tuple[str, float | None]] = []
+    for i, (tok, val) in enumerate(zip(tokens, values)):
+        if i == n_prompt:
+            items.append(("[REASONING]", None))
+        if i == n_prompt + n_reasoning:
+            items.append(("[ANSWER]", None))
+        items.append((tok.replace("\n", "\\n") or " ", val))
+
+    # monospace char width (~0.6x fontsize in points -> inches) sizes the wrap width
+    char_w_in = 0.6 * fontsize / 72
+    margin_in = 0.6
+    chars_per_line = max(20, int((fig_width - margin_in) / char_w_in))
+
+    lines: list[list[tuple[str, float | None]]] = [[]]
+    line_len = 0
+    for text, val in items:
+        w = len(text) + 1
+        if line_len + w > chars_per_line and lines[-1]:
+            lines.append([])
+            line_len = 0
+        lines[-1].append((text, val))
+        line_len += w
+
+    vmax = max((v for v in values if v), default=1.0) or 1.0
+    cmap = mpl.colormaps["YlOrRd"]
+    norm = mcolors.Normalize(vmin=0, vmax=vmax)
+
+    line_h_in = fontsize / 72 * 2.2
+    fig_h = max(1.5, line_h_in * len(lines) + 0.6)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_h))
+    ax.set_xlim(0, chars_per_line)
+    ax.set_ylim(0, len(lines))
+    ax.axis("off")
+
+    for row_i, line in enumerate(lines):
+        y = len(lines) - row_i - 0.5
+        x = 0.0
+        for text, val in line:
+            if val is None:
+                ax.text(x, y, text, fontsize=fontsize, family="monospace", va="center", ha="left",
+                         color="#555555", fontstyle="italic", fontweight="bold")
+            else:
+                ax.text(x, y, text, fontsize=fontsize, family="monospace", va="center", ha="left",
+                         bbox={"facecolor": cmap(norm(val)), "edgecolor": "none", "pad": 1.0})
+            x += len(text) + 1
+
+    task = row.get("task_name", "")
+    setup = row.get("setup_id", "")
+    ex_id = row.get("id", "")
+    ax.set_title(f"B1 AttnLRP token relevance — {task} / {setup} / id={ex_id}", fontsize=11)
+    fig.tight_layout()
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
+
+
+def plot_b1_token_heatmaps(config, limit: int = 3, out_dir: Path | None = None) -> list[Path]:
+    """Renders `plot_b1_token_heatmap` for the first `limit` examples of every
+    (task, setup) in `results/attnlrp/*.jsonl`. Rows missing `token_relevance`
+    (results from before that field existed) are skipped with a warning."""
+    out_dir = Path(out_dir) if out_dir else Path(config.b1["results_dir"]) / "token_heatmaps"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    model_name = config.model.split("/")[-1]
+    paths = []
+    for task in config.tasks:
+        for setup in config.setups:
+            src = config.b1_path(task, setup)
+            if not src.exists():
+                continue
+            rows = _load_jsonl(src)
+            for row in rows[:limit]:
+                if not row.get("token_relevance"):
+                    logger.warning(
+                        "SKIP token heatmap (no token_relevance): %s id=%s — re-run B1 to regenerate",
+                        src, row.get("id"),
+                    )
+                    continue
+                out_path = out_dir / f"{task}-{model_name}-{setup}-id{row['id']}.png"
+                paths.append(plot_b1_token_heatmap(row, out_path))
+    return paths
