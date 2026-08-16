@@ -57,8 +57,7 @@ mkdir -p "$TMPDIR" "$HF_HOME" "$HF_DATASETS_CACHE" "$HUGGINGFACE_HUB_CACHE" "$TR
 
 # --- Environment: activate the venv  ---
 cd "$REPO"
-VENV="${VENV:-venvs/.venv}"
-source "$VENV/bin/activate"
+source ".venv/bin/activate"
 
 echo "Job:      ${SLURM_JOB_ID:-local}"
 echo "Node:     $(hostname)"
