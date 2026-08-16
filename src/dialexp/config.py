@@ -43,6 +43,7 @@ class Config:
         "results_dir": "results/attnlrp",
         "max_examples": 3,           # examples per (task, setup) — keep small
         "max_answer_tokens": None,   # None = explain the whole answer (no cap)
+        "target": "whole",           # "whole" = explain the whole answer; "value" = only the located parsed_answer span
     })
 
     def benchmark_path(self, task: str) -> Path:

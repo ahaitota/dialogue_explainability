@@ -1,29 +1,21 @@
 """B1 — Attention saliency via AttnLRP (Achtibat et al., 2024; LXT library).
 
-Teacher-forced **replay** of saved Step A sequences: reconstruct prompt + generated
-tokens, run one LRP backward pass per explained answer token, and measure how much
-input relevance flows from the **reasoning** tokens onto the **answer** tokens —
-the proposal's B1 question ("did the reasoning actually influence the output?").
+Teacher-forced replay of saved Step A sequences: sum every explained answer
+token's target logit into one backward pass, and measure how much input
+relevance flows onto them from the prompt / reasoning / answer-so-far.
 
-Uses LXT's efficient (Input×Gradient) AttnLRP: `monkey_patch` the model's modeling
-module, forward on `inputs_embeds`, backward from a target-token logit, and read
-`relevance = (embeds * embeds.grad).sum(-1)` per input token.
-
-Caveats (see docs/project_structure.md):
-- LXT needs a compatibility patch for transformers 5.x (`dialexp._lxt_compat`).
-- Qwen3 attribution is experimental ("skewed toward first token") — accepted for
-  now; swap to a fully-supported model (Llama-3/Gemma-3) later for cleaner maps.
-- The generated sequence is *reconstructed* from `cot`/`response` (Step A did not
-  save token ids). The reasoning/answer boundary is computed from character
-  offsets (exact, for fast tokenizers), falling back to the old approximate
-  re-tokenization method if the tokenizer doesn't support offset mapping.
-- By default the WHOLE answer is explained (`config.b1["max_answer_tokens"] =
-  None`); set an int to cap it for speed (pilot-scale). `config.b1["max_examples"]`
-  still caps how many examples per (task, setup) are attributed — each backward
-  pass is expensive.
+Caveats:
+- Needs the transformers-5.x compatibility patch (`dialexp._lxt_compat`).
+- Qwen3 attribution is experimental (skewed toward the first token).
+- Sequences are reconstructed from `cot`/`response`; the reasoning/answer
+  boundary uses char offsets, or a re-tokenized approximation as fallback.
+- One combined backward pass (not one per token) for speed under gradient
+  checkpointing; causal masking makes the region-fraction split exact anyway.
+- `target: "value"` restricts attribution to the located parsed_answer span
+  instead of the whole answer.
 
 Reads results/step_a/<task>-<model>-<setup>.jsonl; writes
-results/attnlrp/<task>-<model>-<setup>.jsonl (per-example relevance summary).
+results/attnlrp/<task>-<model>-<setup>.jsonl.
 """
 from __future__ import annotations
 
@@ -42,6 +34,57 @@ _DTYPES = {"bfloat16": "bfloat16", "float16": "float16", "float32": "float32"}
 def _load_rows(path: Path) -> list[dict]:
     with open(path) as f:
         return [json.loads(line) for line in f if line.strip()]
+
+
+def _normalize_with_map(text: str) -> tuple[str, list[int]]:
+    """Lowercase/strip-punctuation/collapse-whitespace text (& -> and), keeping
+    an index back to the original string, for fuzzy answer matching."""
+    out_chars: list[str] = []
+    index_map: list[int] = []
+    prev_was_space = False
+    for i, ch in enumerate(text):
+        if ch == "&":
+            for c in "and":
+                out_chars.append(c)
+                index_map.append(i)
+            prev_was_space = False
+        elif ch.isalnum():
+            out_chars.append(ch.lower())
+            index_map.append(i)
+            prev_was_space = False
+        elif ch.isspace() and not prev_was_space:
+            out_chars.append(" ")
+            index_map.append(i)
+            prev_was_space = True
+    return "".join(out_chars), index_map
+
+
+def _fuzzy_find(haystack: str, needle: str) -> tuple[int, int] | None:
+    norm_hay, hay_map = _normalize_with_map(haystack)
+    norm_needle, _ = _normalize_with_map(needle)
+    norm_needle = norm_needle.strip()
+    if not norm_needle or not hay_map:
+        return None
+    pos = norm_hay.rfind(norm_needle) 
+    if pos == -1:
+        return None
+    return hay_map[pos], hay_map[pos + len(norm_needle) - 1] + 1
+
+
+def _locate_answer_span(response: str, parsed_answer) -> tuple[int, int] | None:
+    """Char span in `response` covering every parsed_answer value, or None."""
+    if not parsed_answer:
+        return None
+    values = parsed_answer if isinstance(parsed_answer, list) else [parsed_answer]
+    spans = [s for s in (_fuzzy_find(response, str(v)) for v in values) if s]
+    if not spans:
+        return None
+    return min(s[0] for s in spans), max(s[1] for s in spans)
+
+
+def _char_span_to_token_span(offsets, char_start: int, char_end: int) -> tuple[int, int] | None:
+    positions = [i for i, (s, e) in enumerate(offsets) if e > char_start and s < char_end]
+    return (min(positions), max(positions) + 1) if positions else None
 
 
 def _build_model(config: Config):
@@ -67,14 +110,16 @@ def _build_model(config: Config):
     # LXT has no built-in map for Qwen3.5 - have to use custom patch map (see _lxt_qwen3_5_patch.py)
     patch_map = _build_qwen3_5_patch_map() if module.__name__ == _QWEN3_5_MODULE else None
     monkey_patch(module, patch_map=patch_map, verbose=False)
-    # gradient checkpointing trades compute for memory: recomputes activations during
-    # backward instead of keeping them all resident
+    # gradient checkpointing trades compute for memory (recomputes on backward)
     model.gradient_checkpointing_enable()
     model.train()
     return model, tokenizer
 
 
-def _attribute_example(model, tokenizer, row: dict, max_answer_tokens: int | None) -> dict:
+def _attribute_example(
+    model, tokenizer, row: dict, max_answer_tokens: int | None, target: str = "whole",
+) -> dict | None:
+    """Returns None to skip a row (target="value" only, when parsed_answer can't be located)."""
     import torch
 
     messages = row["messages"]
@@ -90,6 +135,7 @@ def _attribute_example(model, tokenizer, row: dict, max_answer_tokens: int | Non
     answer_char_start = len(reasoning_prefix)
 
     # tokenize once with char offsets for an exact reasoning/answer boundary
+    offsets = None
     try:
         encoded = tokenizer(
             continuation, add_special_tokens=False, return_tensors="pt", return_offsets_mapping=True,
@@ -112,46 +158,57 @@ def _attribute_example(model, tokenizer, row: dict, max_answer_tokens: int | Non
     n_prompt = prompt_ids.shape[1]
     answer_start = min(n_prompt + reasoning_len, full_ids.shape[1])
     answer_positions = list(range(answer_start, full_ids.shape[1]))
-    explained = answer_positions if max_answer_tokens is None else answer_positions[:max_answer_tokens]
+
+    value_start = value_end = None
+    if target == "value":
+        if row.get("finish_reason") == "length":
+            logger.warning("SKIP id=%s: response truncated, no clean final answer to locate", row.get("id"))
+            return None
+        if offsets is None:
+            logger.warning("SKIP id=%s: no char offsets (slow tokenizer) — can't locate value span", row.get("id"))
+            return None
+        span = _locate_answer_span(response, row.get("parsed_answer"))
+        if span is None:
+            logger.warning("SKIP id=%s: parsed_answer missing or not found in response text", row.get("id"))
+            return None
+        token_span = _char_span_to_token_span(offsets, answer_char_start + span[0], answer_char_start + span[1])
+        if token_span is None:
+            logger.warning("SKIP id=%s: located value span didn't map to any token", row.get("id"))
+            return None
+        value_start = max(n_prompt + token_span[0], answer_start)
+        value_end = min(n_prompt + token_span[1], full_ids.shape[1])
+        explained = list(range(value_start, value_end))
+        if not explained:
+            logger.warning("SKIP id=%s: value span is empty after clamping", row.get("id"))
+            return None
+    else:
+        explained = answer_positions if max_answer_tokens is None else answer_positions[:max_answer_tokens]
 
     # one teacher-forced forward pass over the whole known sequence
     embeds = model.get_input_embeddings()(full_ids).detach().requires_grad_(True)
     logits = model(inputs_embeds=embeds, use_cache=False).logits
 
-    relevance_fracs = []
-    token_frac_sum = torch.zeros(full_ids.shape[1], device=embeds.device)
-    for q in explained:
-        if q == 0:
-            continue
-        target = full_ids[0, q]
-        if embeds.grad is not None:
-            embeds.grad.zero_()
-        logits[0, q - 1, target].backward(retain_graph=True)
+    valid = [q for q in explained if q != 0]
+    n = len(valid)
+    if n:
+        # one combined backward pass; causal masking makes the slices below exact
+        combined_target = sum(logits[0, q - 1, full_ids[0, q]] for q in valid)
+        combined_target.backward()
         # Input×Gradient: embedding * its relevance, summed → one score per token
         relevance = (embeds * embeds.grad).sum(-1)[0].float().abs()
         total = float(relevance.sum().item()) or 1.0
-        token_frac_sum += relevance / total
-        # split relevance by region: prompt / reasoning / answer-so-far
-        prompt_mass = float(relevance[:n_prompt].sum().item())
-        reasoning_mass = float(relevance[n_prompt:answer_start].sum().item())
-        answer_mass = float(relevance[answer_start:q].sum().item())
-        relevance_fracs.append({
-            "prompt": prompt_mass / total,
-            "reasoning": reasoning_mass / total,
-            "answer": answer_mass / total,
-        })
+        mean_prompt = float(relevance[:n_prompt].sum().item()) / total
+        mean_reasoning = float(relevance[n_prompt:answer_start].sum().item()) / total
+        mean_answer = float(relevance[answer_start:].sum().item()) / total
+        token_relevance = [round(v, 5) for v in (relevance / total).tolist()]
+    else:
+        mean_prompt = mean_reasoning = mean_answer = None
+        token_relevance = []
 
-    n = len(relevance_fracs)
-    mean_reasoning = sum(f["reasoning"] for f in relevance_fracs) / n if n else None
-    mean_prompt = sum(f["prompt"] for f in relevance_fracs) / n if n else None
-    mean_answer = sum(f["answer"] for f in relevance_fracs) / n if n else None
-
-    # per-input-token relevance, averaged over all explained answer tokens (for
-    # rendering a whole-text heatmap; see plots.plot_b1_token_heatmap)
+    # tokens for rendering a whole-text heatmap; see plots.plot_b1_token_heatmap
     from lxt.utils import clean_tokens
 
     tokens = clean_tokens(tokenizer.convert_ids_to_tokens(full_ids[0])) if n else []
-    token_relevance = [round(v, 5) for v in (token_frac_sum / n).tolist()] if n else []
 
     return {
         "id": row["id"],
@@ -162,19 +219,18 @@ def _attribute_example(model, tokenizer, row: dict, max_answer_tokens: int | Non
         "n_reasoning_tokens": reasoning_len,
         "n_answer_tokens": len(answer_positions),
         "n_explained": n,
+        "value_start": value_start,
+        "value_end": value_end,
         "mean_reasoning_relevance": mean_reasoning,
         "mean_prompt_relevance": mean_prompt,
         "mean_answer_relevance": mean_answer,
-        "reasoning_relevance_per_token": [round(f["reasoning"], 4) for f in relevance_fracs],
-        "answer_relevance_per_token": [round(f["answer"], 4) for f in relevance_fracs],
         "tokens": tokens,
         "token_relevance": token_relevance,
     }
 
 
 def run_b1(config: Config) -> None:
-    """AttnLRP runs over saved Step A results. Builds its own model
-    (LXT replay mode differs from the generation client), so it is standalone."""
+    """Standalone: builds its own model since LXT replay mode differs from the generation client."""
     model = tokenizer = None
     for task_name in config.tasks:
         for setup_id in config.setups:
@@ -192,12 +248,17 @@ def run_b1(config: Config) -> None:
                 model, tokenizer = _build_model(config)
 
             rows = _load_rows(src)[: config.b1["max_examples"]]
-            summaries = [
-                _attribute_example(model, tokenizer, row, config.b1["max_answer_tokens"])
-                for row in rows
-            ]
+            target = config.b1.get("target", "whole")
+            summaries = []
+            for row in rows:
+                summary = _attribute_example(model, tokenizer, row, config.b1["max_answer_tokens"], target=target)
+                if summary is not None:
+                    summaries.append(summary)
             out_path.parent.mkdir(parents=True, exist_ok=True)
             with open(out_path, "w") as f:
                 for summary in summaries:
                     f.write(json.dumps(summary, ensure_ascii=False) + "\n")
-            logger.info("wrote %d AttnLRP summaries -> %s", len(summaries), out_path)
+            logger.info(
+                "wrote %d/%d AttnLRP summaries -> %s (target=%s)",
+                len(summaries), len(rows), out_path, target,
+            )

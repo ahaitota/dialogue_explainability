@@ -47,3 +47,4 @@ b1:
   results_dir: results/attnlrp
   max_examples: 10         
   max_answer_tokens: null  # null = explain the whole answer, set an int to cap for speed
+  target: value            # whole = explain the whole answer; value = only the located parsed_answer span
