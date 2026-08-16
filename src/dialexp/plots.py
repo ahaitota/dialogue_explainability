@@ -177,6 +177,8 @@ def plot_b1_token_heatmap(row: dict, out_path: Path, fig_width: float = 11.0, fo
     values = row["token_relevance"]
     n_prompt = row["n_prompt_tokens"]
     n_reasoning = row["n_reasoning_tokens"]
+    value_start = row.get("value_start")
+    value_end = row.get("value_end")
 
     # mark region boundaries as plain (uncolored) labels inline with the text
     items: list[tuple[str, float | None]] = []
@@ -185,7 +187,11 @@ def plot_b1_token_heatmap(row: dict, out_path: Path, fig_width: float = 11.0, fo
             items.append(("[REASONING]", None))
         if i == n_prompt + n_reasoning:
             items.append(("[ANSWER]", None))
+        if value_start is not None and i == value_start:
+            items.append(("[VALUE→]", None))
         items.append((tok.replace("\n", "\\n") or " ", val))
+        if value_end is not None and i == value_end - 1:
+            items.append(("[←VALUE]", None))
 
     # monospace char width (~0.6x fontsize in points -> inches) sizes the wrap width
     char_w_in = 0.6 * fontsize / 72
@@ -202,7 +208,12 @@ def plot_b1_token_heatmap(row: dict, out_path: Path, fig_width: float = 11.0, fo
         lines[-1].append((text, val))
         line_len += w
 
-    vmax = max((v for v in values if v), default=1.0) or 1.0
+    # exclude token 0 (BOS/<|im_start|>) from the color scale: attention sinks
+    # make the first token disproportionately "relevant" (LXT's own docs note
+    # Qwen3 attribution is "skewed toward first token"), which otherwise washes
+    # out contrast across the rest of the heatmap. It still renders, just
+    # clipped to the same color as the new max.
+    vmax = max((v for v in values[1:] if v), default=1.0) or 1.0
     cmap = mpl.colormaps["YlOrRd"]
     norm = mcolors.Normalize(vmin=0, vmax=vmax)
 
