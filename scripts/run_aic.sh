@@ -63,9 +63,14 @@ source "$VENV/bin/activate"
 echo "Job:      ${SLURM_JOB_ID:-local}"
 echo "Node:     $(hostname)"
 echo "Config:   $CONFIG_PATH"
+echo "Task:     ${TASK:-<all>}"
+echo "Setup:    ${SETUP:-<all>}"
 echo "Started:  $(date)"
 
 # --- Run B1 (writes results to results/attnlrp/ in the repo) --------------
-python scripts/run_b1.py "$CONFIG_PATH"
+B1_ARGS=()
+[[ -n "${TASK:-}" ]] && B1_ARGS+=(--task "$TASK")
+[[ -n "${SETUP:-}" ]] && B1_ARGS+=(--setup "$SETUP")
+python scripts/run_b1.py "$CONFIG_PATH" "${B1_ARGS[@]}"
 
 echo "Finished: $(date)"
