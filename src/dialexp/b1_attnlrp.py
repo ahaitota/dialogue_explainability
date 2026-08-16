@@ -71,12 +71,25 @@ def _fuzzy_find(haystack: str, needle: str) -> tuple[int, int] | None:
     return hay_map[pos], hay_map[pos + len(norm_needle) - 1] + 1
 
 
+def _answer_value_candidates(value) -> list[str]:
+    """String forms to try for one parsed_answer value. Whole-number floats
+    (e.g. 750.0) also try the plain integer form, since responses normally
+    write whole-number amounts without a trailing ".0"."""
+    if isinstance(value, (int, float)) and float(value) == int(value):
+        return [str(value), str(int(value))]
+    return [str(value)]
+
+
 def _locate_answer_span(response: str, parsed_answer) -> tuple[int, int] | None:
     """Char span in `response` covering every parsed_answer value, or None."""
-    if not parsed_answer:
+    if parsed_answer is None or parsed_answer == []:
         return None
     values = parsed_answer if isinstance(parsed_answer, list) else [parsed_answer]
-    spans = [s for s in (_fuzzy_find(response, str(v)) for v in values) if s]
+    spans = []
+    for v in values:
+        span = next((s for c in _answer_value_candidates(v) if (s := _fuzzy_find(response, c))), None)
+        if span:
+            spans.append(span)
     if not spans:
         return None
     return min(s[0] for s in spans), max(s[1] for s in spans)
