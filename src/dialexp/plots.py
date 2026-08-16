@@ -161,6 +161,52 @@ def plot_b1(config, out_dir: Path | None = None) -> list[Path]:
     return [_heatmap(matrices[metric], tasks, setups, metric, out_dir) for metric in metrics]
 
 
+def _byte_surrogate_reverse_map() -> dict[str, int]:
+    """Reverse of GPT-2/tiktoken-style byte<->unicode surrogate table: maps each
+    surrogate glyph (e.g. 'Ċ', 'Â') back to its raw byte value."""
+    bs = list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
+    cs = bs[:]
+    n = 0
+    for b in range(256):
+        if b not in bs:
+            bs.append(b)
+            cs.append(256 + n)
+            n += 1
+    return {chr(c): b for b, c in zip(bs, cs)}
+
+
+_BYTE_SURROGATE_REVERSE = _byte_surrogate_reverse_map()
+
+
+def _fix_byte_level_tokens(tokens: list[str]) -> list[str]:
+    """BPE tokenizers spell raw bytes as surrogate glyphs (newline as 'Ċ', '£'
+    as 'Â£', ...) instead of the real character. Reconstructs the real text per
+    token, merging adjacent byte-fragments where one token holds an incomplete
+    multi-byte character -- consumed earlier tokens become "" so the list length
+    and every other token's position is unchanged (index-based markers rely on it).
+    """
+    fixed = list(tokens)
+    pending = bytearray()
+    pending_start = None
+    for i, tok in enumerate(tokens):
+        for ch in tok:
+            b = _BYTE_SURROGATE_REVERSE.get(ch)
+            pending.extend([b] if b is not None else ch.encode("utf-8"))
+        if pending_start is None:
+            pending_start = i
+        try:
+            text = pending.decode("utf-8")
+        except UnicodeDecodeError:
+            fixed[i] = ""
+            continue
+        for j in range(pending_start, i):
+            fixed[j] = ""
+        fixed[i] = text
+        pending.clear()
+        pending_start = None
+    return fixed
+
+
 def plot_b1_token_heatmap(row: dict, out_path: Path, fig_width: float = 11.0, fontsize: int = 9) -> Path:
     """Whole-text heatmap for one B1 example: every input token (prompt +
     reasoning + answer) colored by its relevance to the explained answer tokens,
@@ -173,7 +219,7 @@ def plot_b1_token_heatmap(row: dict, out_path: Path, fig_width: float = 11.0, fo
     import matplotlib as mpl
     import matplotlib.colors as mcolors
 
-    tokens = row["tokens"]
+    tokens = _fix_byte_level_tokens(row["tokens"])
     values = row["token_relevance"]
     n_prompt = row["n_prompt_tokens"]
     n_reasoning = row["n_reasoning_tokens"]
@@ -189,7 +235,8 @@ def plot_b1_token_heatmap(row: dict, out_path: Path, fig_width: float = 11.0, fo
             items.append(("[ANSWER]", None))
         if value_start is not None and i == value_start:
             items.append(("[VALUE→]", None))
-        items.append((tok.replace("\n", "\\n") or " ", val))
+        if tok:  # "" = consumed by a multi-byte character merged into a later token
+            items.append((tok.replace("\n", "\\n"), val))
         if value_end is not None and i == value_end - 1:
             items.append(("[←VALUE]", None))
 
