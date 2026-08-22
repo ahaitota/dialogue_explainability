@@ -45,6 +45,14 @@ class Config:
         "max_answer_tokens": None,   # None = explain the whole answer (no cap)
         "target": "whole",           # "whole" = explain the whole answer; "value" = only the located parsed_answer span
     })
+    # B2 activation patching — `fields` names the domain fact corrupted per task
+    b2: dict = field(default_factory=lambda: {
+        "results_dir": "results/patching",
+        "max_examples": 3,
+        # task -> {mode: scale, path: <nested key in the last tool message's JSON,
+        # e.g. "price.single"; a list there is indexed at [0]>} or {mode: hours}
+        "fields": {},
+    })
 
     def benchmark_path(self, task: str) -> Path:
         return Path(self.paths["benchmark_dir"]) / f"{task}.json"
@@ -68,6 +76,10 @@ class Config:
     def b1_path(self, task: str, setup: str) -> Path:
         model_name = self.model.split("/")[-1]
         return Path(self.b1["results_dir"]) / f"{task}-{model_name}-{setup}.jsonl"
+
+    def b2_path(self, task: str, setup: str) -> Path:
+        model_name = self.model.split("/")[-1]
+        return Path(self.b2["results_dir"]) / f"{task}-{model_name}-{setup}.jsonl"
 
 
 def load_config(path: str | Path) -> Config:

@@ -48,3 +48,21 @@ b1:
   max_examples: 10         
   max_answer_tokens: null  # null = explain the whole answer, set an int to cap for speed
   target: value            # whole = explain the whole answer; value = only the located parsed_answer span
+
+b2:
+  # Activation patching. Per task, which domain fact in the last tool message is
+  # swapped for a same-length one. Tasks left out here are skipped.
+  #   scale — scale the number at `path` (17.10 pounds -> 20.52 pounds)
+  #   hours — leave the venue the model listed first open only 30 min on the
+  #           queried weekday (10:30 -> 21:00), so it drops out of the answer
+  results_dir: results/patching
+  max_examples: 10
+  fields:
+    train_ticket_price:
+      mode: scale
+      path: price_standard
+    accommodation_price:
+      mode: scale
+      path: price.single
+    restaurants_opening_hours:
+      mode: hours
