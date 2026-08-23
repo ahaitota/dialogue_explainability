@@ -51,10 +51,12 @@ b1:
 
 b2:
   # Activation patching. Per task, which domain fact in the last tool message is
-  # swapped for a same-length one. Tasks left out here are skipped.
-  #   scale — scale the number at `path` (17.10 pounds -> 20.52 pounds)
-  #   hours — leave the venue the model listed first open only 30 min on the
-  #           queried weekday (10:30 -> 21:00), so it drops out of the answer
+  # swapped for a same-length one. Tasks left out here are skipped. The swap is
+  # measured where the model's own reasoning first restates it, so only facts the
+  # reasoning actually quotes are usable.
+  #   scale — scale the number at `path` (17.10 pounds -> 20.52 pounds). `path`
+  #           may be a list; the first candidate the reasoning quotes is used.
+  #   hours — shift a quoted opening time by whole hours (10:30 -> 13:30)
   results_dir: results/patching
   max_examples: 10
   fields:
@@ -63,6 +65,9 @@ b2:
       path: price_standard
     accommodation_price:
       mode: scale
-      path: price.single
+      path:                  # some hotels list no single room, so fall back
+        - price.single
+        - price.double
+        - price.family
     restaurants_opening_hours:
       mode: hours
