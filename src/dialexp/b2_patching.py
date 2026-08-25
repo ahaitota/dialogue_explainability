@@ -48,15 +48,34 @@ _FACTORS = (1.2, 0.8, 1.5, 0.6, 1.1, 0.9, 1.3, 0.7)
 _HOURS_SHIFT = 3  # opening times move by whole hours, staying a plausible opening time
 
 
-def _fact_pattern(value: str) -> re.Pattern | None:
-    """How a fact value appears in prose: "17.10 pounds" is written "£17.10"."""
+def _prose_form(value: str) -> str:
+    """The part of a fact value that appears in prose: "17.10 pounds" is written "£17.10"."""
     if ":" in value:
-        return re.compile(re.escape(value))
+        return value
     match = _NUMBER.search(value)
-    if not match:
+    return match.group() if match else value
+
+
+def _fact_pattern(value: str) -> re.Pattern | None:
+    prose = _prose_form(value)
+    if ":" in prose:
+        return re.compile(re.escape(prose))
+    if not _NUMBER.fullmatch(prose):
         return None
     # reject digits embedded in a longer number, so "50" does not match "150"
-    return re.compile(rf"(?<![\d.]){re.escape(match.group())}(?![\d])")
+    return re.compile(rf"(?<![\d.]){re.escape(prose)}(?![\d])")
+
+
+def _first_changed_offset(old: str, new: str) -> int | None:
+    """Offset into the prose form of the first character the swap changes.
+
+    Qwen tokenises numbers digit by digit, so "10:30" -> "13:30" shares its first
+    token and reading there would compare two identical predictions.
+    """
+    old_prose, new_prose = _prose_form(old), _prose_form(new)
+    if len(old_prose) != len(new_prose):
+        return None
+    return next((i for i, (a, b) in enumerate(zip(old_prose, new_prose)) if a != b), None)
 
 
 def _restated_at(continuation: str, value: str) -> tuple[int, int] | None:
@@ -245,7 +264,13 @@ def _prepare(model, tokenizer, row: dict, spec: dict) -> dict | None:
     cont_ids = encoded["input_ids"].to(model.device)
 
     char_span = _restated_at(continuation, old_value)
-    token_span = _char_span_to_token_span(offsets, *char_span)
+    changed = _first_changed_offset(old_value, new_value)
+    if changed is None:
+        logger.warning("SKIP id=%s: swap changes no character of the quoted form", row_id)
+        return None
+    # read where the swap first alters the text, not at the start of the value
+    read_char = char_span[0] + changed
+    token_span = _char_span_to_token_span(offsets, read_char, read_char + 1)
     if token_span is None:
         logger.warning("SKIP id=%s: fact restatement didn't map to any token", row_id)
         return None
