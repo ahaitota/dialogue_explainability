@@ -53,6 +53,16 @@ class Config:
         # e.g. "price.single"; a list there is indexed at [0]>} or {mode: hours}
         "fields": {},
     })
+    # Step C — thresholds are preregistered: fix before running, never tune after
+    step_c: dict = field(default_factory=lambda: {
+        "evidence_dir": "results/evidence",
+        "explanations_dir": "results/explanations",
+        "judgements_dir": "results/judgements",
+        "require_b2": False,        # flip on once B2 results exist
+        "b1_top_k": 10,             # highest-relevance prompt tokens kept as spans
+        "b2_causal_threshold": 0.5,  # patching score at which a region counts as causal
+        "seed": 42,                 # blinding order for the judge
+    })
 
     def benchmark_path(self, task: str) -> Path:
         return Path(self.paths["benchmark_dir"]) / f"{task}.json"
@@ -80,6 +90,18 @@ class Config:
     def b2_path(self, task: str, setup: str) -> Path:
         model_name = self.model.split("/")[-1]
         return Path(self.b2["results_dir"]) / f"{task}-{model_name}-{setup}.jsonl"
+
+    def evidence_path(self, task: str, setup: str) -> Path:
+        model_name = self.model.split("/")[-1]
+        return Path(self.step_c["evidence_dir"]) / f"{task}-{model_name}-{setup}.jsonl"
+
+    def explanation_path(self, task: str, setup: str) -> Path:
+        model_name = self.model.split("/")[-1]
+        return Path(self.step_c["explanations_dir"]) / f"{task}-{model_name}-{setup}.jsonl"
+
+    def judgement_path(self, task: str, setup: str) -> Path:
+        model_name = self.model.split("/")[-1]
+        return Path(self.step_c["judgements_dir"]) / f"{task}-{model_name}-{setup}.jsonl"
 
 
 def load_config(path: str | Path) -> Config:
