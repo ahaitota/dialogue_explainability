@@ -98,7 +98,29 @@ def _scale_number(text: str, factor: float) -> str | None:
     return text[: match.start()] + new + text[match.end() :]
 
 
-def _swap_number(data, paths, continuation: str) -> tuple[str, str, str] | None:
+def _replace_everywhere(node, old: str, new: str) -> int:
+    """Swap every occurrence of a value, returning how many were changed.
+
+    The same fact is usually repeated across the tool result (one venue's opening
+    time recurs for every weekday, and often across venues). Corrupting a single
+    occurrence leaves the model clean copies to read instead, so the prediction
+    never moves and the example yields nothing.
+    """
+    if isinstance(node, dict):
+        changed = 0
+        for key, value in node.items():
+            if isinstance(value, str) and value == old:
+                node[key] = new
+                changed += 1
+            else:
+                changed += _replace_everywhere(value, old, new)
+        return changed
+    if isinstance(node, list):
+        return sum(_replace_everywhere(item, old, new) for item in node)
+    return 0
+
+
+def _swap_number(data, paths, continuation: str) -> tuple[str, str, str, int] | None:
     """Corrupt the first candidate path whose value the reasoning actually restates."""
     for dotted in paths:
         node = data[0] if isinstance(data, list) else data
@@ -116,12 +138,11 @@ def _swap_number(data, paths, continuation: str) -> tuple[str, str, str] | None:
         for factor in _FACTORS:
             new = _scale_number(old, factor)
             if new is not None:
-                node[key] = new
-                return dotted, old, new
+                return dotted, old, new, _replace_everywhere(data, old, new)
     return None
 
 
-def _shift_hours(data, continuation: str) -> tuple[str, str, str] | None:
+def _shift_hours(data, continuation: str) -> tuple[str, str, str, int] | None:
     """Shift the opening time of the first venue/day the reasoning quotes."""
     for venue in data if isinstance(data, list) else [data]:
         for day, hours in (venue.get("openhours") or {}).items():
@@ -135,14 +156,13 @@ def _shift_hours(data, continuation: str) -> tuple[str, str, str] | None:
             new = f"{(hh + _HOURS_SHIFT) % 24:02d}:{mm:02d}"
             if new == old or len(new) != len(old):
                 continue
-            hours["open"] = new
-            return f"{venue.get('name')}.{day}.open", old, new
+            return f"{venue.get('name')}.{day}.open", old, new, _replace_everywhere(data, old, new)
     return None
 
 
 def _corrupt_messages(
     messages: list[dict], spec: dict, continuation: str,
-) -> tuple[list[dict], str, str, str] | None:
+) -> tuple[list[dict], str, str, str, int] | None:
     """Symmetric token replacement of one domain fact in the last tool message."""
     idx = next((i for i in reversed(range(len(messages))) if messages[i].get("role") == "tool"), None)
     if idx is None:
@@ -248,7 +268,7 @@ def _prepare(model, tokenizer, row: dict, spec: dict) -> dict | None:
         logger.warning("SKIP id=%s: no same-length swap whose value the reasoning restates (%s)",
                        row_id, spec)
         return None
-    corrupt_messages, field, old_value, new_value = corrupted
+    corrupt_messages, field, old_value, new_value, n_occurrences = corrupted
 
     template_kwargs = {"add_generation_prompt": True, "return_tensors": "pt", "return_dict": False}
     clean_prompt = tokenizer.apply_chat_template(row["messages"], **template_kwargs).to(model.device)
@@ -288,7 +308,8 @@ def _prepare(model, tokenizer, row: dict, spec: dict) -> dict | None:
         logger.warning("SKIP id=%s: swap produced identical tokens", row_id)
         return None
 
-    # patching at or after the read position is causally inert, so cap every region
+    # causal masking makes positions after the read position inert; the read
+    # position itself is included, where a patch acts most directly
     limit = fact_start
     regions = {
         "fact": [p for p in fact_positions if p < limit],
@@ -309,6 +330,7 @@ def _prepare(model, tokenizer, row: dict, spec: dict) -> dict | None:
         "corrupted_field": field,
         "corrupted_from": old_value,
         "corrupted_to": new_value,
+        "corrupted_occurrences": n_occurrences,
     }
 
 
@@ -322,6 +344,7 @@ def _patch_example(model, tokenizer, row: dict, spec: dict) -> dict | None:
     read_pos = prepared["fact_start"] - 1
 
     clean_cache, corrupt_cache = {}, {}
+    # run the clean and corrupted prompts
     clean_logits = _run(model, clean_ids, read_pos, cache=clean_cache)
     corrupt_logits = _run(model, corrupt_ids, read_pos, cache=corrupt_cache)
 
@@ -341,18 +364,25 @@ def _patch_example(model, tokenizer, row: dict, spec: dict) -> dict | None:
         return None
 
     effects = []
+    # run 256 patched run: 2 directions × 4 regions × 32 layers, reading the logit difference at the reusing the token from the prompt
     for direction in ("denoising", "noising"):
         base_ids = corrupt_ids if direction == "denoising" else clean_ids
         source = clean_cache if direction == "denoising" else corrupt_cache
         for region, positions in prepared["regions"].items():
             for layer in range(len(_layers(model))):
-                patched = logit_diff(_run(model, base_ids, read_pos, patch=(layer, positions, source)))
+                logits = _run(model, base_ids, read_pos, patch=(layer, positions, source))
+                patched = logit_diff(logits)
                 score = (patched - ld_corrupt) if direction == "denoising" else (ld_clean - patched)
                 effects.append({
                     "direction": direction,
                     "region": region,
                     "layer": layer,
                     "score": round(score / denom, 5),
+                    # a logit difference can rise either by favouring the written token or
+                    # merely by damaging its rival, so keep both sides separable
+                    # (Heimersheim & Nanda 2024, sec. 4.2)
+                    "logit_clean_token": round(float(logits[clean_token]), 4),
+                    "logit_corrupt_token": round(float(logits[corrupt_token]), 4),
                 })
 
     return {
@@ -363,6 +393,7 @@ def _patch_example(model, tokenizer, row: dict, spec: dict) -> dict | None:
         "corrupted_field": prepared["corrupted_field"],
         "corrupted_from": prepared["corrupted_from"],
         "corrupted_to": prepared["corrupted_to"],
+        "corrupted_occurrences": prepared["corrupted_occurrences"],
         "n_prompt_tokens": prepared["n_prompt"],
         "fact_start": prepared["fact_start"],
         "restated_in": prepared["restated_in"],
@@ -370,6 +401,10 @@ def _patch_example(model, tokenizer, row: dict, spec: dict) -> dict | None:
         "corrupt_token": tokenizer.decode([corrupt_token]),
         "logit_diff_clean": round(ld_clean, 4),
         "logit_diff_corrupt": round(ld_corrupt, 4),
+        "logit_clean_token_clean_run": round(float(clean_logits[clean_token]), 4),
+        "logit_corrupt_token_clean_run": round(float(clean_logits[corrupt_token]), 4),
+        "logit_clean_token_corrupt_run": round(float(corrupt_logits[clean_token]), 4),
+        "logit_corrupt_token_corrupt_run": round(float(corrupt_logits[corrupt_token]), 4),
         "region_sizes": {name: len(pos) for name, pos in prepared["regions"].items()},
         "n_layers": len(_layers(model)),
         "effects": effects,
