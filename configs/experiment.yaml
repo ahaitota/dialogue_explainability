@@ -44,7 +44,7 @@ ask_why:
 
 b1:
   # AttnLRP attention-saliency 
-  results_dir: results/attnlrp
+  results_dir: results/attnlrp_answer_value
   max_examples: 10         
   max_answer_tokens: null  # null = explain the whole answer, set an int to cap for speed
   target: value            # whole = explain the whole answer; value = only the located parsed_answer span

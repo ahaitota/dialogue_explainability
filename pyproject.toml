@@ -26,6 +26,7 @@ dependencies = [
     "transformers>=4.45",
     "matplotlib>=3.11.1",
     "lxt>=2.1",
+    "streamlit>=1.62.0",
 ]
 
 [tool.uv]
