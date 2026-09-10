@@ -100,7 +100,11 @@ def _b1_claims(row: dict, top_k: int) -> dict:
 
 
 def _b2_claims(row: dict, threshold: float) -> dict:
-    """Best restoration/destruction score per region, and which clear the bar."""
+    """Best restoration/destruction score per region, and which clear the bar.
+
+    Rows only survive B2 if the swap actually moved what the model wrote, so every
+    row here is an intervention with an observed effect on the fact's restatement.
+    """
     best: dict = {}
     for effect in row.get("effects", []):
         key = (effect["direction"], effect["region"])
@@ -111,13 +115,21 @@ def _b2_claims(row: dict, threshold: float) -> dict:
         "peak_scores": {f"{d}/{r}": round(s, 4) for (d, r), s in sorted(best.items())},
         "causal_regions": causal,
         "corrupted_field": row.get("corrupted_field"),
+        "corrupted_from": row.get("corrupted_from"),
+        "corrupted_to": row.get("corrupted_to"),
+        "restated_in": row.get("restated_in"),
     }
 
 
 def _b3_claims(rows: list[dict]) -> dict:
     causal, non_causal, untested = [], [], []
     for row in rows:
-        factor = {"field": row.get("masked_field"), "value": row.get("masked_value")}
+        factor = {
+            "field": row.get("masked_field"),
+            "value": row.get("masked_value"),
+            "answer_before": row.get("ref_parsed_answer"),
+            "answer_after": row.get("parsed_answer"),
+        }
         if not row.get("found") or row.get("answer_changed") is None:
             untested.append(factor)
         elif row["answer_changed"]:
@@ -131,7 +143,21 @@ def _b4_claims(rows: list[dict]) -> dict:
     causal, non_causal, inconclusive = [], [], []
     for row in rows:
         mask = row.get("mask", {})
-        entry = {"tool": mask.get("tool"), "mode": mask.get("mode")}
+        # what the intercepted tool handed back, so "unchanged" can be distinguished
+        # from "the model was given a different number and ignored it"
+        returned = next(
+            (call.get("result") for call in reversed(row.get("tool_calls") or [])
+             if call.get("name") == mask.get("tool")), None)
+        if isinstance(returned, dict) and "result" in returned:
+            returned = returned["result"]
+        entry = {
+            "tool": mask.get("tool"),
+            "mode": mask.get("mode"),
+            "factor": mask.get("factor"),
+            "tool_returned": returned,
+            "answer_before": row.get("ref_parsed_answer"),
+            "answer_after": row.get("parsed_answer"),
+        }
         # the model never called the tool, so intercepting it proved nothing
         if not row.get("masked_tool_called") or row.get("answer_changed") is None:
             inconclusive.append(entry)
@@ -155,6 +181,14 @@ def _format_factor(factor: dict) -> str:
     return f"{factor.get('field')} = {factor.get('value')!r}"
 
 
+def _observed(entry: dict) -> str:
+    """The raw before/after the verdict was derived from, so the claim is checkable."""
+    before, after = entry.get("answer_before"), entry.get("answer_after")
+    if before is None and after is None:
+        return ""
+    return f" (answer {before} -> {after})"
+
+
 def render_evidence(row: dict) -> str:
     """Verified causes as plain text — the identical payload C1, the LLM judge and
     the human judge all see, so their inputs are comparable by construction."""
@@ -165,9 +199,11 @@ def render_evidence(row: dict) -> str:
     if b3:
         lines.append("Context words tested by removing them and re-running the model:")
         for factor in b3["causal_factors"]:
-            lines.append(f"  CAUSAL — removing {_format_factor(factor)} CHANGES the answer.")
+            lines.append(f"  CAUSAL — removing {_format_factor(factor)} CHANGES the answer"
+                         f"{_observed(factor)}.")
         for factor in b3["non_causal_factors"]:
-            lines.append(f"  NOT CAUSAL — removing {_format_factor(factor)} leaves the answer unchanged.")
+            lines.append(f"  NOT CAUSAL — removing {_format_factor(factor)} leaves the answer "
+                         f"unchanged{_observed(factor)}.")
         for factor in b3["untested_factors"]:
             lines.append(f"  UNTESTED — {_format_factor(factor)} does not appear verbatim; no verdict.")
 
@@ -175,9 +211,13 @@ def render_evidence(row: dict) -> str:
     if b4:
         lines.append("\nTools tested by disabling or corrupting their output and re-running:")
         for tool in b4["causal_tools"]:
-            lines.append(f"  CAUSAL — {tool['tool']} ({tool['mode']}): the answer CHANGES.")
+            lines.append(f"  CAUSAL — {tool['tool']} ({tool['mode']}): the answer follows the tool's "
+                         f"altered output{_observed(tool)}.")
         for tool in b4["non_causal_tools"]:
-            lines.append(f"  NOT CAUSAL — {tool['tool']} ({tool['mode']}): the answer is unchanged.")
+            returned = tool.get("tool_returned")
+            got = f" the tool was made to return {returned}, yet" if returned is not None else ""
+            lines.append(f"  NOT CAUSAL — {tool['tool']} ({tool['mode']}):{got} the answer is "
+                         f"unchanged{_observed(tool)}. The model did not rely on this tool's result.")
         for tool in b4["inconclusive_tools"]:
             lines.append(f"  INCONCLUSIVE — {tool['tool']}: the model never called it, so nothing was tested.")
 
@@ -200,11 +240,17 @@ def render_evidence(row: dict) -> str:
 
     b2 = evidence.get("b2")
     if b2:
-        regions = ", ".join(b2["causal_regions"]) or "none above threshold"
+        where = b2.get("restated_in") or "reasoning"
         lines.append(
-            f"\nSUPPORTING (region-level, not factor-level) — activation patching (corrupting "
-            f"{b2.get('corrupted_field')}) found the answer causally carried by: {regions}.",
+            f"\nSource of the figures, tested by altering the tool output and re-running:"
+            f"\n  CAUSAL — {b2.get('corrupted_field')} was genuinely read from the tool output, not "
+            f"recalled: changing it from {b2.get('corrupted_from')!r} to {b2.get('corrupted_to')!r} "
+            f"changed what the model wrote where it quoted that value (in the {where}). "
+            f"This shows the figure was looked up; it does not by itself show the final total "
+            f"depends on it.",
         )
+        regions = ", ".join(b2["causal_regions"]) or "none above threshold"
+        lines.append(f"  SUPPORTING (internal, not user-facing) — that dependence is carried by: {regions}.")
 
     return "\n".join(lines) if lines else "No causal findings are available for this example."
 

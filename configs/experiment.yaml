@@ -71,3 +71,13 @@ b2:
         - price.family
     restaurants_opening_hours:
       mode: hours
+
+step_c:
+  # Preregistered: fix these before running, never tune them after seeing results.
+  evidence_dir: results/evidence
+  explanations_dir: results/explanations
+  judgements_dir: results/judgements
+  require_b2: true          # B2 has results now, so demand it wherever it applies
+  b1_top_k: 10              # highest-relevance prompt tokens kept as spans
+  b2_causal_threshold: 0.5  # patching score at which a region counts as causal
+  seed: 42                  # blinding order for the judge

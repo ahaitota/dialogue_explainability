@@ -6,7 +6,9 @@ is the experimental arm; the ask-why baseline is the control.
 
 The model is deliberately the *same* one used everywhere else in the pipeline. That
 keeps model capability constant between the two arms, so any faithfulness gap is
-attributable to the causal evidence rather than to a stronger explainer.
+attributable to the causal evidence rather than to a stronger explainer. For the
+same reason the closing question is the ask-why prompt verbatim (read from
+`config.ask_why["prompt"]`), leaving the verified causes as the only difference.
 
 Reads results/evidence/<task>-<model>-<setup>.jsonl; writes
 results/explanations/<task>-<model>-<setup>.jsonl.
@@ -23,9 +25,9 @@ from dialexp.hf_client import HFClient
 logger = logging.getLogger(__name__)
 
 _SYSTEM = (
-    "You explain, to the user, why an assistant gave a particular answer. "
-    "You are given the assistant's trace and the results of causal experiments run on "
-    "that exact answer. Follow these rules strictly:\n"
+    "You are the assistant that produced the answer below, explaining to the user why you "
+    "gave it. You are also shown the results of causal experiments run on that exact answer. "
+    "Follow these rules strictly:\n"
     "1. Attribute the answer ONLY to factors the experiments marked CAUSAL.\n"
     "2. Never claim a factor marked NOT CAUSAL influenced the answer. If it is likely to "
     "seem relevant to the user, say explicitly that it was tested and did not affect the answer.\n"
@@ -38,14 +40,16 @@ _SYSTEM = (
 )
 
 
-def _prompt(row: dict) -> str:
-    trace = [f"User's question: {row.get('question')}", f"Assistant's answer: {row.get('answer')}"]
+def _prompt(row: dict, question: str) -> str:
+    """`question` is the ask-why prompt verbatim, so the two arms differ only in
+    whether the causal findings are present."""
+    trace = [f"User's question: {row.get('question')}", f"Your answer: {row.get('answer')}"]
     for call in row.get("tool_calls") or []:
         trace.append(f"Tool call: {call.get('name')}({call.get('arguments')}) -> {call.get('result')}")
     return (
         "TRACE\n" + "\n".join(trace)
         + "\n\nVERIFIED CAUSAL FINDINGS\n" + render_evidence(row)
-        + "\n\nWrite the explanation now."
+        + f"\n\n{question}"
     )
 
 
@@ -54,6 +58,7 @@ def run_c1(config: Config, client: HFClient | None = None) -> None:
         client = HFClient(
             config.model, dtype=config.dtype, device=config.device, decoding=config.decoding,
         )
+    question = config.ask_why["prompt"]
 
     for task_name in config.tasks:
         for setup_id in config.setups:
@@ -72,7 +77,7 @@ def run_c1(config: Config, client: HFClient | None = None) -> None:
                     if not line.strip():
                         continue
                     row = json.loads(line)
-                    prompt = _prompt(row)
+                    prompt = _prompt(row, question)
                     result = client.chat(messages=[
                         {"role": "system", "content": _SYSTEM},
                         {"role": "user", "content": prompt},
@@ -86,6 +91,7 @@ def run_c1(config: Config, client: HFClient | None = None) -> None:
                         "explanation": result.content,
                         "explanation_cot": result.reasoning,
                         "finish_reason": getattr(result, "finish_reason", None),
+                        "why_prompt": question,
                         "prompt": prompt,
                     })
 
