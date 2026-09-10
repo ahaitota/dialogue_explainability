@@ -162,22 +162,62 @@ with tabs[4]:
         if b2 is None:
             st.warning(f"Example {row_id} was skipped by B2 (see the job log for the reason).")
         else:
+            st.markdown(
+                f"**Swapped** `{b2['corrupted_field']}` from **{b2['corrupted_from']}** "
+                f"to **{b2['corrupted_to']}** "
+                f"({b2.get('corrupted_occurrences', '?')} occurrence(s) changed in the tool result)",
+            )
             cols = st.columns(4)
-            cols[0].metric("corrupted", f"{b2['corrupted_from']} → {b2['corrupted_to']}")
-            cols[1].metric("occurrences swapped", b2.get("corrupted_occurrences", "?"))
-            cols[2].metric("read at token", b2["fact_start"])
-            cols[3].metric("restated in", b2.get("restated_in", "?"))
-            st.caption(f"Field `{b2['corrupted_field']}` · "
-                       f"written token {b2['clean_token']!r} vs rival {b2['corrupt_token']!r} · "
-                       f"LD clean {b2['logit_diff_clean']}, corrupt {b2['logit_diff_corrupt']}")
+            cols[0].metric("token being predicted", b2["fact_start"])
+            cols[1].metric("restated in", b2.get("restated_in", "?"))
+            cols[2].metric("logit diff — clean", b2["logit_diff_clean"])
+            cols[3].metric("logit diff — corrupted", b2["logit_diff_corrupt"])
+            st.caption(
+                f"Position **{b2['fact_start']}** holds the digit the swap changes; because logits "
+                f"at position *t* predict the token at *t+1*, they are read at position "
+                f"**{b2['fact_start'] - 1}**. There the model actually wrote "
+                f"**{b2['clean_token']!r}**; reading the corrupted tool result it would write "
+                f"**{b2['corrupt_token']!r}** instead. The logit difference compares those two "
+                "tokens: positive means it still prefers what it really wrote, negative means the "
+                "corruption won — i.e. it was reading the value out of the prompt at that moment.",
+            )
             st.subheader("Patching effect by layer")
             st.pyplot(charts.b2_layer_figure(b2))
-            st.caption("1.0 = fully restored (denoising) or fully destroyed (noising); 0 = no effect.")
+            st.caption(
+                "1.0 = fully restored (denoising) or fully destroyed (noising); 0 = no effect. "
+                "`prompt`/`fact` high on the left and `reasoning` high on the right means the fact "
+                "starts out living in the prompt and is copied into the reasoning; the crossover is "
+                "the layer where the hand-off happens. `fact` tracking `prompt` means the effect "
+                "comes from the swapped tokens alone, not the rest of the prompt.",
+            )
             st.subheader("False-positive check (Heimersheim & Nanda §4.2)")
             region = st.selectbox("Region", sorted(b2["region_sizes"]))
             st.pyplot(charts.b2_logit_figure(b2, region))
             st.caption("A genuine restoration raises the written token's logit. If only the rival's "
                        "logit falls, the patch merely damaged the model.")
+            with st.expander("Where in the input the swap happened"):
+                st.markdown(
+                    f"The swap is made in the **last `tool` message** of the conversation \u2014 the "
+                    f"retrieved record the assistant was given. Field `{b2['corrupted_field']}`, "
+                    f"**{b2['corrupted_from']}** \u2192 **{b2['corrupted_to']}**.",
+                )
+                tool_msg = next(
+                    (m for m in reversed((step_a or {}).get("messages", [])) if m.get("role") == "tool"),
+                    None)
+                if tool_msg:
+                    try:
+                        st.json(json.loads(tool_msg["content"]), expanded=False)
+                    except json.JSONDecodeError:
+                        st.text(tool_msg["content"])
+                st.caption(
+                    f"Those {b2['region_sizes'].get('fact', '?')} swapped token(s) sit inside the "
+                    f"prompt (positions 0–{b2['n_prompt_tokens'] - 1}) — in the tool result, which is "
+                    "followed by more conversation, so they are not at the prompt's end. The "
+                    f"measurement is at position {b2['fact_start'] - 1}, "
+                    f"{b2['fact_start'] - 1 - b2['n_prompt_tokens']} tokens into the continuation. "
+                    "Swap and measurement are far apart, which is what makes the result meaningful: "
+                    "information had to travel.",
+                )
             with st.expander("Region sizes (tokens patched)"):
                 st.json(b2["region_sizes"])
 
@@ -227,6 +267,17 @@ with tabs[6]:
                 left.markdown((step_a or {}).get("response") or "_n/a_")
                 right.caption(f"With the tool masked: {row.get('parsed_answer')}")
                 right.markdown(row.get("response") or "_not rerun_")
+                st.markdown("**Tool calls — original vs this rerun**")
+                calls = st.columns(2)
+                calls[0].caption("Step A (clean)")
+                calls[0].json((step_a or {}).get("tool_calls") or [], expanded=False)
+                calls[1].caption(f"Rerun with `{mask['tool']}` {mask['mode']}d")
+                calls[1].json(row.get("tool_calls") or [], expanded=False)
+                st.caption(
+                    "Compare the intercepted tool's `result` between the two. If it differs but "
+                    "the answer did not move, the model ignored the tool and computed the value "
+                    "itself — a tool call the answer does not actually depend on.",
+                )
 
 # ---- C1: grounded explanation -------------------------------------------
 with tabs[7]:
@@ -254,6 +305,14 @@ with tabs[7]:
             if grounded is None:
                 missing("C1 synthesis",
                         "uv run python scripts/run_step_c.py configs/experiment.yaml --phase synthesis")
+                from dialexp.c1_synthesis import _SYSTEM, _prompt
+
+                st.subheader("Preview — exactly what will be sent")
+                st.caption("Built live from the evidence row, so it can be checked before the run.")
+                st.markdown("**System message** (the six rules)")
+                st.text(_SYSTEM)
+                st.markdown("**User message**")
+                st.text(_prompt(evidence, config.ask_why["prompt"]))
             else:
                 st.markdown(grounded.get("explanation") or "_empty_")
                 if grounded.get("explanation_cot"):
