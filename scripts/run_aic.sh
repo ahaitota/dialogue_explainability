@@ -72,6 +72,8 @@ STAGE="${STAGE:-b1}"
 STAGE_ARGS=()
 [[ -n "${TASK:-}" ]] && STAGE_ARGS+=(--task "$TASK")
 [[ -n "${SETUP:-}" ]] && STAGE_ARGS+=(--setup "$SETUP")
+# step_c is the only stage split into phases (evidence/synthesis/judge)
+[[ -n "${PHASE:-}" ]] && STAGE_ARGS+=(--phase "$PHASE")
 python "scripts/run_${STAGE}.py" "$CONFIG_PATH" "${STAGE_ARGS[@]}"
 
 echo "Finished: $(date)"
