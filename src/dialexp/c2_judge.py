@@ -32,7 +32,10 @@ from dialexp.significance import paired_bootstrap
 logger = logging.getLogger(__name__)
 
 CRITERIA = ("faithfulness", "completeness", "trace_consistency")
-_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+_OBJECT_RES = (re.compile(r"\{.*\}", re.DOTALL), re.compile(r"\{.*?\}\s*\}", re.DOTALL))
+_SLOT_KEYS = {"A": ("A", "a", "explanation_a", "EXPLANATION A"),
+              "B": ("B", "b", "explanation_b", "EXPLANATION B")}
 
 _SYSTEM = (
     "You are grading two candidate explanations of an assistant's answer against a list of "
@@ -61,23 +64,39 @@ def _judge_prompt(row: dict, text_a: str, text_b: str) -> str:
     )
 
 
+def _coerce_slots(parsed: dict) -> dict | None:
+    """Pull an A/B score pair out of a parsed object, tolerating key spellings."""
+    slots = {}
+    for slot, aliases in _SLOT_KEYS.items():
+        found = next((parsed[k] for k in aliases if isinstance(parsed, dict) and k in parsed), None)
+        if not isinstance(found, dict):
+            return None
+        try:
+            slots[slot] = {c: float(found[c]) for c in CRITERIA}
+        except (KeyError, TypeError, ValueError):
+            return None
+    return slots
+
+
 def _parse_scores(text: str | None) -> dict | None:
-    match = _JSON_RE.search(text or "")
-    if not match:
+    """Judges wrap JSON in prose or code fences often enough to be worth tolerating."""
+    if not text:
         return None
-    try:
-        parsed = json.loads(match.group())
-    except json.JSONDecodeError:
-        return None
-    if not all(slot in parsed for slot in ("A", "B")):
-        return None
-    try:
-        return {
-            slot: {c: float(parsed[slot][c]) for c in CRITERIA}
-            for slot in ("A", "B")
-        }
-    except (KeyError, TypeError, ValueError):
-        return None
+    candidates = [m.group(1) for m in _FENCE_RE.finditer(text)]
+    candidates.append(text)
+    for candidate in candidates:
+        for regex in _OBJECT_RES:
+            match = regex.search(candidate)
+            if not match:
+                continue
+            try:
+                parsed = json.loads(match.group())
+            except json.JSONDecodeError:
+                continue
+            slots = _coerce_slots(parsed)
+            if slots:
+                return slots
+    return None
 
 
 def _has_distractor(row: dict) -> bool:
@@ -97,6 +116,7 @@ def _rows_by_id(path) -> dict:
 
 def _summarise(judged: list[dict]) -> dict:
     """Paired per-example deltas (grounded − ask-why), overall and on the distractor subset."""
+    judged = [r for r in judged if r.get("scores")]
     summary = {}
     for label, subset in (
         ("all", judged),
@@ -158,9 +178,20 @@ def run_c2(config: Config, client: HFClient | None = None) -> None:
                         {"role": "user", "content": prompt},
                     ])
                     by_slot = _parse_scores(result.content)
+                    finish = getattr(result, "finish_reason", None)
                     if by_slot is None:
-                        logger.warning("SKIP id=%s (%s/%s): judge returned unparsable scores",
-                                       row_id, task_name, setup_id)
+                        # keep the raw reply: a discarded failure cannot be diagnosed
+                        logger.warning(
+                            "SKIP id=%s (%s/%s): unparsable judge scores (finish=%s) — %r",
+                            row_id, task_name, setup_id, finish, (result.content or "")[:300],
+                        )
+                        out_rows.append({
+                            "id": row_id, "task_name": task_name, "setup_id": setup_id,
+                            "model": config.model, "scores": None, "finish_reason": finish,
+                            "raw_judge_output": result.content,
+                            "raw_judge_reasoning": result.reasoning,
+                            "judge_input": prompt,
+                        })
                         continue
                     out_rows.append({
                         "id": row_id,
@@ -170,6 +201,7 @@ def run_c2(config: Config, client: HFClient | None = None) -> None:
                         "has_distractor": _has_distractor(row),
                         "slots": slots,
                         "scores": {arm: by_slot[slot] for slot, arm in slots.items()},
+                        "finish_reason": finish,
                         "judge_input": prompt,
                     })
 
