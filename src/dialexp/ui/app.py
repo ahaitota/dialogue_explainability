@@ -305,21 +305,27 @@ with tabs[7]:
             if grounded is None:
                 missing("C1 synthesis",
                         "uv run python scripts/run_step_c.py configs/experiment.yaml --phase synthesis")
-                from dialexp.c1_synthesis import _SYSTEM, _prompt
+                from dialexp.c1_synthesis import _FINDINGS_TURN
 
                 st.subheader("Preview — exactly what will be sent")
-                st.caption("Built live from the evidence row, so it can be checked before the run.")
-                st.markdown("**System message** (the six rules)")
-                st.text(_SYSTEM)
-                st.markdown("**User message**")
-                st.text(_prompt(evidence, config.ask_why["prompt"]))
+                st.caption("The Step A dialogue is replayed unchanged, then these two turns are "
+                           "appended. The final turn is the ask-why prompt verbatim, so the arms "
+                           "differ only in the findings turn.")
+                st.markdown("**Appended user turn** (the findings)")
+                st.text(_FINDINGS_TURN.format(findings=render_evidence(evidence)))
+                st.markdown("**Final user turn** (identical to the ask-why baseline)")
+                st.text(config.ask_why["prompt"])
             else:
                 st.markdown(grounded.get("explanation") or "_empty_")
                 if grounded.get("explanation_cot"):
                     with st.expander("Model reasoning"):
                         st.text(grounded["explanation_cot"])
-                with st.expander("Exact prompt sent to the model"):
+                with st.expander("The findings turn that was injected"):
                     st.text(grounded.get("prompt") or "")
+                with st.expander("Full replayed conversation"):
+                    for message in grounded.get("messages") or []:
+                        st.markdown(f"**{message.get('role')}**")
+                        st.text(message.get("content") or "")
             with st.expander("Raw evidence record"):
                 st.json(evidence.get("evidence", {}))
 
@@ -343,6 +349,11 @@ with tabs[8]:
     st.subheader("Scores")
     if judged is None:
         missing("C2 judging", "uv run python scripts/run_step_c.py configs/experiment.yaml --phase judge")
+    elif not judged.get("scores"):
+        st.warning("The judge did not return usable scores for this example; the raw replies are kept below.")
+        for arm, call in (judged.get("judge_calls") or {}).items():
+            with st.expander(f"{arm} — finish_reason: {call.get('finish_reason')}"):
+                st.text(call.get("raw_judge_output") or "")
     else:
         rows = [{"arm": arm, **{c: scores[c] for c in judged["scores"][arm]}}
                 for arm, scores in judged["scores"].items()]
@@ -354,12 +365,13 @@ with tabs[8]:
             col.metric(criterion, judged["scores"]["grounded"][criterion], delta=round(delta, 2),
                        help="grounded minus ask-why")
         st.caption(
-            f"Shown to the judge blind and in randomised order as {judged['slots']} · "
+            f"Each explanation was scored alone, order {judged['order']} · "
             f"in the distractor subset: **{judged['has_distractor']}** "
             "(B proved at least one factor NOT causal, so a self-report has something to get wrong).",
         )
-        with st.expander("Exact input the judge saw (identical for the human judge)"):
-            st.text(judged.get("judge_input") or "")
+        for arm, call in (judged.get("judge_calls") or {}).items():
+            with st.expander(f"Exact input the judge saw — {arm}"):
+                st.text(call.get("prompt") or "")
 
 # ---- Cross-stage ---------------------------------------------------------
 with tabs[9]:
