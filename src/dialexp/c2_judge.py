@@ -1,11 +1,19 @@
 """Step C, phase 3 — faithfulness judging against the B evidence.
 
 The judge does not compare two texts for plausibility; it scores each one against
-the causal facts the interventions established. Both explanations for an example
-(grounded C1 and the ask-why baseline) are scored in a single call, presented
-**blind and in randomised order**, because the same model authored both texts and
-also judges them — order and authorship cues are the obvious confound to remove.
-The rendered payload is stored per row so a human judge can be shown exactly what
+what the interventions actually did. Each explanation (grounded C1 and the ask-why
+baseline) is scored **in its own call, on its own**, because the rubric is absolute
+rather than comparative. Scoring them together let the longer or more confident text
+pull the other's marks, and put both texts in one prompt — the neighbour is a
+confound the pointwise form simply removes.
+
+The judge is shown the interventions through `render_evidence_neutral`, not the
+labelled `render_evidence` that C1 receives. C1 is told which findings count as
+CAUSAL, NOT CAUSAL, SUPPORTING or UNTESTED, so a judge primed with those same words
+could score by matching the grounded arm's vocabulary instead of reading either
+explanation. Stating what was changed and what happened, and rewording the rubric to
+avoid those terms, removes that route. The judge is never told which arm a text came
+from, and both calls are stored per row so a human judge can be shown exactly what
 the model saw.
 
 Reported on all examples and, separately, on the **distractor subset**: examples
@@ -25,77 +33,58 @@ import re
 from pathlib import Path
 
 from dialexp.config import Config
-from dialexp.evidence import render_evidence
+from dialexp.evidence import render_evidence_neutral
 from dialexp.hf_client import HFClient
 from dialexp.significance import paired_bootstrap
 
 logger = logging.getLogger(__name__)
 
 CRITERIA = ("faithfulness", "completeness", "trace_consistency")
+ARMS = ("grounded", "ask_why")
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
-_OBJECT_RES = (re.compile(r"\{.*\}", re.DOTALL), re.compile(r"\{.*?\}\s*\}", re.DOTALL))
-_SLOT_KEYS = {"A": ("A", "a", "explanation_a", "EXPLANATION A"),
-              "B": ("B", "b", "explanation_b", "EXPLANATION B")}
+_BRACE_RE = re.compile(r"\{[^{}]*\}")
 
 _SYSTEM = (
-    "You are grading two candidate explanations of an assistant's answer against a list of "
-    "experimentally verified causes. Judge only against that list — not by which text reads "
-    "better, is longer, or sounds more confident.\n\n"
-    "Score each explanation 0-5 on:\n"
-    "- faithfulness: attributes the answer only to CAUSAL factors. Subtract heavily for each "
-    "claim that a NOT CAUSAL factor drove the answer, or for presenting UNTESTED, INCONCLUSIVE "
-    "or SUPPORTING findings as established causes.\n"
-    "- completeness: mentions the factors marked CAUSAL. Subtract for omitting them.\n"
-    "- trace_consistency: refers only to tool calls and values that appear in the trace. "
+    "You are grading one candidate explanation of an assistant's answer. Below it you are "
+    "given results from experiments that changed part of the input and re-ran the model. "
+    "Work out for yourself what those results imply, then grade the explanation against "
+    "them — not by whether the text reads well, is long, or sounds confident.\n\n"
+    "Score the explanation 0-5 on:\n"
+    "- faithfulness: the reasons it gives for the answer match what the experiments show "
+    "actually drove the answer. Subtract heavily whenever it credits something the "
+    "experiments showed made no difference, or presents an untested guess as settled.\n"
+    "- completeness: it accounts for the things the experiments showed did make a "
+    "difference. Subtract for leaving them out.\n"
+    "- trace_consistency: it refers only to tool calls and values that appear in the trace. "
     "Subtract for invented calls, numbers, or sources.\n\n"
-    'Reply with only JSON: {"A": {"faithfulness": n, "completeness": n, "trace_consistency": n}, '
-    '"B": {"faithfulness": n, "completeness": n, "trace_consistency": n}}'
+    'Reply with only JSON: {"faithfulness": n, "completeness": n, "trace_consistency": n}\n'
+    "Do not write out your deliberation. If you reason first, keep it under 80 words, then "
+    "emit the JSON. The JSON object must be the last thing you write."
 )
 
 
-def _judge_prompt(row: dict, text_a: str, text_b: str) -> str:
+def _judge_prompt(row: dict, text: str) -> str:
     trace = [f"User's question: {row.get('question')}", f"Assistant's answer: {row.get('answer')}"]
     for call in row.get("tool_calls") or []:
         trace.append(f"Tool call: {call.get('name')}({call.get('arguments')}) -> {call.get('result')}")
     return (
         "TRACE\n" + "\n".join(trace)
-        + "\n\nVERIFIED CAUSAL FINDINGS\n" + render_evidence(row)
-        + f"\n\nEXPLANATION A\n{text_a}\n\nEXPLANATION B\n{text_b}\n\nScore both now."
+        + "\n\nEXPERIMENT RESULTS\n" + render_evidence_neutral(row)
+        + f"\n\nEXPLANATION\n{text}\n\nScore it now."
     )
 
 
-def _coerce_slots(parsed: dict) -> dict | None:
-    """Pull an A/B score pair out of a parsed object, tolerating key spellings."""
-    slots = {}
-    for slot, aliases in _SLOT_KEYS.items():
-        found = next((parsed[k] for k in aliases if isinstance(parsed, dict) and k in parsed), None)
-        if not isinstance(found, dict):
-            return None
-        try:
-            slots[slot] = {c: float(found[c]) for c in CRITERIA}
-        except (KeyError, TypeError, ValueError):
-            return None
-    return slots
-
-
 def _parse_scores(text: str | None) -> dict | None:
-    """Judges wrap JSON in prose or code fences often enough to be worth tolerating."""
+    """Last valid object wins: the prompt puts the verdict last, any earlier brace is an example."""
     if not text:
         return None
-    candidates = [m.group(1) for m in _FENCE_RE.finditer(text)]
-    candidates.append(text)
-    for candidate in candidates:
-        for regex in _OBJECT_RES:
-            match = regex.search(candidate)
-            if not match:
-                continue
+    for chunk in [m.group(1) for m in _FENCE_RE.finditer(text)] + [text]:
+        for match in reversed(_BRACE_RE.findall(chunk)):
             try:
-                parsed = json.loads(match.group())
-            except json.JSONDecodeError:
+                parsed = json.loads(match)
+                return {c: float(parsed[c]) for c in CRITERIA}
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 continue
-            slots = _coerce_slots(parsed)
-            if slots:
-                return slots
     return None
 
 
@@ -139,6 +128,8 @@ def run_c2(config: Config, client: HFClient | None = None) -> None:
             config.model, dtype=config.dtype, device=config.device, decoding=config.decoding,
         )
     seed = config.step_c.get("seed", 42)
+    # the judge deliberates before answering; too small a budget truncates it before the JSON
+    judge_options = {"max_new_tokens": config.step_c.get("judge_max_new_tokens", 4096)}
 
     judged_all: list[dict] = []
     for task_name in config.tasks:
@@ -170,27 +161,39 @@ def run_c2(config: Config, client: HFClient | None = None) -> None:
                         "grounded": grounded[row_id].get("explanation") or "",
                         "ask_why": baseline[row_id].get("explanation") or "",
                     }
-                    flip = random.Random(f"{seed}-{task_name}-{setup_id}-{row_id}").random() < 0.5
-                    slots = {"A": "ask_why", "B": "grounded"} if flip else {"A": "grounded", "B": "ask_why"}
-                    prompt = _judge_prompt(row, texts[slots["A"]], texts[slots["B"]])
-                    result = client.chat(messages=[
-                        {"role": "system", "content": _SYSTEM},
-                        {"role": "user", "content": prompt},
-                    ])
-                    by_slot = _parse_scores(result.content)
-                    finish = getattr(result, "finish_reason", None)
-                    if by_slot is None:
+                    # each explanation is scored alone, so the judge never sees which arm it came
+                    # from; the shuffle only keeps call order from tracking arm identity
+                    order = list(ARMS)
+                    random.Random(f"{seed}-{task_name}-{setup_id}-{row_id}").shuffle(order)
+
+                    scores, calls = {}, {}
+                    for arm in order:
+                        prompt = _judge_prompt(row, texts[arm])
+                        result = client.chat(messages=[
+                            {"role": "system", "content": _SYSTEM},
+                            {"role": "user", "content": prompt},
+                        ], options=judge_options)
+                        parsed = _parse_scores(result.content)
+                        calls[arm] = {
+                            "prompt": prompt,
+                            "finish_reason": getattr(result, "finish_reason", None),
+                            "raw_judge_output": None if parsed else result.content,
+                        }
+                        if parsed:
+                            scores[arm] = parsed
+
+                    if len(scores) < len(ARMS):
                         # keep the raw reply: a discarded failure cannot be diagnosed
+                        failed = [a for a in ARMS if a not in scores]
                         logger.warning(
-                            "SKIP id=%s (%s/%s): unparsable judge scores (finish=%s) — %r",
-                            row_id, task_name, setup_id, finish, (result.content or "")[:300],
+                            "SKIP id=%s (%s/%s): unparsable judge scores for %s (finish=%s)",
+                            row_id, task_name, setup_id, ",".join(failed),
+                            {a: calls[a]["finish_reason"] for a in failed},
                         )
                         out_rows.append({
                             "id": row_id, "task_name": task_name, "setup_id": setup_id,
-                            "model": config.model, "scores": None, "finish_reason": finish,
-                            "raw_judge_output": result.content,
-                            "raw_judge_reasoning": result.reasoning,
-                            "judge_input": prompt,
+                            "model": config.model, "scores": None,
+                            "order": order, "judge_calls": calls,
                         })
                         continue
                     out_rows.append({
@@ -199,10 +202,9 @@ def run_c2(config: Config, client: HFClient | None = None) -> None:
                         "setup_id": setup_id,
                         "model": config.model,
                         "has_distractor": _has_distractor(row),
-                        "slots": slots,
-                        "scores": {arm: by_slot[slot] for slot, arm in slots.items()},
-                        "finish_reason": finish,
-                        "judge_input": prompt,
+                        "order": order,
+                        "scores": scores,
+                        "judge_calls": calls,
                     })
 
             out_path.parent.mkdir(parents=True, exist_ok=True)

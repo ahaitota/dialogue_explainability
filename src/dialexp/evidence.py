@@ -255,6 +255,70 @@ def render_evidence(row: dict) -> str:
     return "\n".join(lines) if lines else "No causal findings are available for this example."
 
 
+def render_evidence_neutral(row: dict) -> str:
+    """The same interventions stated as plain observations, for the judge.
+
+    `render_evidence` labels each finding CAUSAL / NOT CAUSAL / SUPPORTING, and C1 is
+    shown those labels. Reusing them in the judge's input would let it score by matching
+    the grounded arm's vocabulary rather than by reading either explanation, so the judge
+    gets what was changed and what happened, and must draw its own conclusion.
+    """
+    evidence = row.get("evidence", {})
+    lines: list[str] = []
+
+    b3 = evidence.get("b3")
+    if b3:
+        lines.append("Experiments that deleted part of the user's request and re-ran the model:")
+        for factor in b3["causal_factors"]:
+            lines.append(f"  With {_format_factor(factor)} deleted, the answer came out "
+                         f"differently{_observed(factor)}.")
+        for factor in b3["non_causal_factors"]:
+            lines.append(f"  With {_format_factor(factor)} deleted, the answer was the "
+                         f"same{_observed(factor)}.")
+        for factor in b3["untested_factors"]:
+            lines.append(f"  {_format_factor(factor)} does not appear word-for-word in the "
+                         f"dialogue, so no experiment was run on it.")
+
+    b4 = evidence.get("b4")
+    if b4:
+        lines.append("\nExperiments that altered what a tool returned and re-ran the model:")
+        for tool in b4["causal_tools"]:
+            lines.append(f"  {tool['tool']} ({tool['mode']}): the answer moved in step with the "
+                         f"altered output{_observed(tool)}.")
+        for tool in b4["non_causal_tools"]:
+            returned = tool.get("tool_returned")
+            got = f" it was made to return {returned}, and" if returned is not None else ""
+            lines.append(f"  {tool['tool']} ({tool['mode']}):{got} the answer stayed the "
+                         f"same{_observed(tool)}.")
+        for tool in b4["inconclusive_tools"]:
+            lines.append(f"  {tool['tool']} was never called, so no experiment was run on it.")
+
+    b1 = evidence.get("b1")
+    if b1:
+        shares = b1["region_shares"]
+        pretty = ", ".join(
+            f"{name} {value:.0%}" for name, value in shares.items() if value is not None
+        )
+        if pretty:
+            lines.append("\nMeasurements taken without changing anything, which show where the "
+                         f"model was looking rather than what mattered: {pretty}.")
+        if b1.get("top_prompt_spans"):
+            quoted = "; ".join(f'"{span}"' for span in b1["top_prompt_spans"])
+            lines.append(f"  Parts of the input with the highest such measurement: {quoted}.")
+
+    b2 = evidence.get("b2")
+    if b2:
+        where = b2.get("restated_in") or "reasoning"
+        lines.append(
+            "\nAn experiment that edited one figure in the tool output and re-ran the model:"
+            f"\n  {b2.get('corrupted_field')} was changed from {b2.get('corrupted_from')!r} to "
+            f"{b2.get('corrupted_to')!r}, and the figure the model wrote in the {where} changed "
+            f"to match. Whether the final total also depends on it was not tested.",
+        )
+
+    return "\n".join(lines) if lines else "No experiments are available for this example."
+
+
 def build_evidence(config: Config) -> None:
     settings = config.step_c
     require_b2 = bool(settings.get("require_b2", False))
