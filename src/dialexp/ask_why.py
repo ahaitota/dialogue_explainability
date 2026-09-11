@@ -75,6 +75,7 @@ def run_ask_why(config: Config, client: HFClient | None = None) -> None:
                     "why_prompt": why_prompt,
                     "explanation": result.content,
                     "explanation_cot": result.reasoning,
+                    "finish_reason": getattr(result, "finish_reason", None),
                     "source_response": answer,
                     "target": row.get("target"),
                 })
