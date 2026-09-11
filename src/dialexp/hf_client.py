@@ -82,7 +82,7 @@ class HFClient:
         messages: list[dict],
         model: str | None = None,          # ignored; kept for signature parity
         think: bool = False,               # noqa: ARG002 — parity with boulder
-        options: dict | None = None,       # noqa: ARG002 — decoding comes from config
+        options: dict | None = None,       # only max_new_tokens is honoured
         tool_schemas: list[dict] | None = None,
         tool_handler: Callable | None = None,
         max_tool_iterations: int = 10,
@@ -93,7 +93,7 @@ class HFClient:
         text = ""
         finish_reason = "stop"
         for iteration in range(max_tool_iterations + 1):
-            text, finish_reason = self._generate(messages, tool_schemas)
+            text, finish_reason = self._generate(messages, tool_schemas, options)
             calls = self._parse_tool_calls(text)
             can_loop = tool_schemas and tool_handler and calls and iteration < max_tool_iterations
             if not can_loop:
@@ -109,7 +109,8 @@ class HFClient:
         llm_result.finish_reason = finish_reason
         return llm_result
 
-    def _generate(self, messages: list[dict], tool_schemas: list[dict] | None) -> tuple[str, str]:
+    def _generate(self, messages: list[dict], tool_schemas: list[dict] | None,
+                  options: dict | None = None) -> tuple[str, str]:
         torch = self._torch
         inputs = self.tokenizer.apply_chat_template(
             messages,
@@ -119,7 +120,7 @@ class HFClient:
             return_dict=True,
         )
         inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-        gen_kwargs = self._gen_kwargs()
+        gen_kwargs = self._gen_kwargs(options)
         with torch.no_grad():
             output = self.model.generate(**inputs, **gen_kwargs)
         new_tokens = output[0, inputs["input_ids"].shape[-1]:]
@@ -142,10 +143,11 @@ class HFClient:
             return "length"
         return "stop"
 
-    def _gen_kwargs(self) -> dict[str, Any]:
+    def _gen_kwargs(self, options: dict | None = None) -> dict[str, Any]:
         temperature = float(self.decoding.get("temperature", 0.0))
+        max_new_tokens = (options or {}).get("max_new_tokens") or self.decoding.get("max_new_tokens", 2048)
         kwargs: dict[str, Any] = {
-            "max_new_tokens": int(self.decoding.get("max_new_tokens", 2048)),
+            "max_new_tokens": int(max_new_tokens),
             "pad_token_id": self.tokenizer.pad_token_id or self.tokenizer.eos_token_id,
         }
         # Deterministic anti-repetition: penalises already-generated tokens to break

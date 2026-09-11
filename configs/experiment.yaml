@@ -80,4 +80,5 @@ step_c:
   require_b2: true          # B2 has results now, so demand it wherever it applies
   b1_top_k: 10              # highest-relevance prompt tokens kept as spans
   b2_causal_threshold: 0.5  # patching score at which a region counts as causal
+  judge_max_new_tokens: 4096  # judge deliberates first; 2048 truncated it before the JSON
   seed: 42                  # blinding order for the judge
