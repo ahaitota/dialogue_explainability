@@ -249,8 +249,6 @@ def render_evidence(row: dict) -> str:
             f"This shows the figure was looked up; it does not by itself show the final total "
             f"depends on it.",
         )
-        regions = ", ".join(b2["causal_regions"]) or "none above threshold"
-        lines.append(f"  SUPPORTING (internal, not user-facing) — that dependence is carried by: {regions}.")
 
     return "\n".join(lines) if lines else "No causal findings are available for this example."
 

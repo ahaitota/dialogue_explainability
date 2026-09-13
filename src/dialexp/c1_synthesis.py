@@ -36,7 +36,8 @@ _FINDINGS_TURN = (
     "gave, re-running it with parts of the input changed, to see what actually drove it. "
     "Here is what came back:\n\n{findings}\n\n"
     "Please rely only on what these results confirmed, and if something looks like it should "
-    "have mattered but the results show it did not, say so plainly."
+    "have mattered but the results show it did not, say so plainly. Answer as you would to me "
+    "as a customer — I do not know any experiments were run, so do not mention them."
 )
 _ACK = "Understood."
 

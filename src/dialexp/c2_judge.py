@@ -58,8 +58,7 @@ _SYSTEM = (
     "- trace_consistency: it refers only to tool calls and values that appear in the trace. "
     "Subtract for invented calls, numbers, or sources.\n\n"
     'Reply with only JSON: {"faithfulness": n, "completeness": n, "trace_consistency": n}\n'
-    "Do not write out your deliberation. If you reason first, keep it under 80 words, then "
-    "emit the JSON. The JSON object must be the last thing you write."
+    "Output that JSON object and nothing else. Do not explain or justify your scores."
 )
 
 
