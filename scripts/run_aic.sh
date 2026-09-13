@@ -74,6 +74,8 @@ STAGE_ARGS=()
 [[ -n "${SETUP:-}" ]] && STAGE_ARGS+=(--setup "$SETUP")
 # step_c is the only stage split into phases (evidence/synthesis/judge)
 [[ -n "${PHASE:-}" ]] && STAGE_ARGS+=(--phase "$PHASE")
+# the parser is the only stage that rewrites its own input, so re-parsing is opt-in
+[[ -n "${FORCE:-}" ]] && STAGE_ARGS+=(--force)
 python "scripts/run_${STAGE}.py" "$CONFIG_PATH" "${STAGE_ARGS[@]}"
 
 echo "Finished: $(date)"

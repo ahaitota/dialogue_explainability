@@ -18,12 +18,15 @@ emitted by Hermes-style chat templates. Reasoning is extracted from
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from typing import Any, Callable
 
 from boulder.llm.clients import LLMResult
 from boulder.response_parser import ResponseParser
+
+logger = logging.getLogger(__name__)
 
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
 _FUNCTION_RE = re.compile(r"<function=([^>\s]+)\s*>(.*?)</function>", re.DOTALL)
@@ -34,8 +37,34 @@ _DTYPES = {"bfloat16": "bfloat16", "float16": "float16", "float32": "float32"}
 # searches for a "total" phrase followed by a currency amount (ex "Total: $101.24")
 _TOTAL_AMOUNT_RE = re.compile(r"total[^\n£$]{0,40}[£$]\s*([\d,]+\.?\d*)", re.IGNORECASE)
 # searches for a **bold** currency amount (ex "**$17.10**")
-_BOLD_AMOUNT_RE = re.compile(r"\*\*[^*\n]*?[£$]\s*([\d,]+\.?\d*)[^*\n]*?\*\*")
+_BOLD_AMOUNT_RE = re.compile(r"\*\*[^*\n]*?[£$]\s*([\d,]+\.?\d*)[^*\n]*?\*\*")# list answers are usually a markdown table whose first column holds the venue name
+_TABLE_ROW_RE = re.compile(r"^\s*\|(.+)\|\s*$")
+_TABLE_SEP_RE = re.compile(r"^[\s|:-]+$")
+_MD_EMPHASIS_RE = re.compile(r"\*+")
 
+
+def restaurant_fallback(text: str | None) -> list[str] | None:
+    """Venue names from a markdown table, recording what the model listed — right or wrong.
+
+    Deliberately not filtered against the benchmark target: keeping only names that
+    happen to be correct would turn a partly-wrong answer into a perfect one.
+    """
+    if not text:
+        return None
+    rows = [(i, m.group(1)) for i, line in enumerate(text.splitlines())
+            for m in [_TABLE_ROW_RE.match(line)] if m]
+    separators = {i for i, cells in rows if _TABLE_SEP_RE.match(cells)}
+    if not separators:
+        return None
+    headers = {i - 1 for i in separators}
+    names = []
+    for i, cells in rows:
+        if i in separators or i in headers:
+            continue
+        name = _MD_EMPHASIS_RE.sub("", cells.split("|")[0]).strip().lower()
+        if name and name not in names:
+            names.append(name)
+    return names or None
 def amount_fallback(text: str | None) -> float | None:
     """Manually recover a final total from an amount response when the LLM parser fails.
 
@@ -235,10 +264,11 @@ class HFResponseParser(ResponseParser):
     call (`_parse_with_llm`) is swapped to the shared `HFClient`.
     """
 
-    def __init__(self, hf_client: HFClient, retries: int = 3):
+    def __init__(self, hf_client: HFClient, retries: int = 3, max_new_tokens: int = 4096):
         self.hf = hf_client
         self.temperature = 0.0
         self.retries = retries
+        self.max_new_tokens = max_new_tokens
 
     def parse_answer(self, answer, answer_type, context=None):
         # Deterministic fallback for amount tasks when the LLM parser returns None
@@ -246,12 +276,20 @@ class HFResponseParser(ResponseParser):
         result = super().parse_answer(answer, answer_type, context=context)
         if result is None and answer_type == "amount":
             return amount_fallback(answer)
+        if result is None and answer_type == "restaurants":
+            return restaurant_fallback(answer)
         return result
 
     def _parse_with_llm(self, prompt: str, json_field: str | None = None):
         messages = [{"role": "user", "content": prompt}]
-        for _ in range(self.retries):
-            result = self.hf.chat(messages=messages)
+        last_content, last_finish = "", None
+        for attempt in range(self.retries):
+            # decoding is greedy, so a repeat of the same call returns the same text;
+            # only a larger budget can turn a truncated reply into a parsable one
+            result = self.hf.chat(
+                messages=messages,
+                options={"max_new_tokens": self.max_new_tokens * (attempt + 1)},
+            )
             content = (result.content or "").strip()
             if content.startswith("```json"):
                 content = content[7:]
@@ -260,9 +298,12 @@ class HFResponseParser(ResponseParser):
             if content.endswith("```"):
                 content = content[:-3]
             content = content.strip()
+            last_content, last_finish = content, getattr(result, "finish_reason", None)
             try:
                 obj = json.loads(content)
             except json.JSONDecodeError:
                 continue
             return obj.get(json_field) if json_field else obj
+        logger.warning("parser produced no JSON after %d attempts (finish=%s) — %r",
+                       self.retries, last_finish, last_content[:300])
         return None
