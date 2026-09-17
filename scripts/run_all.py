@@ -1,8 +1,8 @@
 """Run the pipeline stages in one process, loading the model once.
 
 Chains the implemented stages in dependency order and shares a single `HFClient`
-so the (expensive) model is loaded only once. Each stage is idempotent (skips
-outputs that already exist), so re-running resumes where a previous run stopped.
+so the (expensive) model is loaded only once. Each stage skips
+outputs that already exist, so re-running resumes where a previous run stopped.
 
     step_a → parser → ask_why → b3 → b4 → evaluation
 

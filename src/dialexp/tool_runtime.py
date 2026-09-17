@@ -100,7 +100,7 @@ def corrupt_result(result, factor: float):
 
 def make_masked_handler(tools_dict: dict, masked_tool: str, mode: str, factor: float = 2.0):
     """Tool handler that intervenes on one tool (B4). Mirrors BOULDER's handler
-    (same message bookkeeping) but for `masked_tool`:
+    but for `masked_tool`:
 
     - ``disable``: returns an error without executing the tool.
     - ``scale``:  executes the tool, then multiplies every number in the result
