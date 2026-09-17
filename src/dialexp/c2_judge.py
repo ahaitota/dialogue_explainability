@@ -43,6 +43,20 @@ CRITERIA = ("faithfulness", "completeness", "trace_consistency")
 ARMS = ("grounded", "ask_why")
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 _BRACE_RE = re.compile(r"\{[^{}]*\}")
+# the judge often ignores the JSON instruction and states the verdict in prose instead
+_PROSE_RES = {c: re.compile(rf"{c.replace('_', '[ _]')}\s*[:=]\s*\**\s*([0-5](?:\.\d+)?)", re.I)
+              for c in CRITERIA}
+
+
+def _parse_prose(text: str) -> dict | None:
+    """Last stated value wins, matching the JSON path: the final mention is the verdict."""
+    found = {}
+    for criterion, regex in _PROSE_RES.items():
+        matches = regex.findall(text)
+        if not matches:
+            return None
+        found[criterion] = float(matches[-1])
+    return found
 
 _SYSTEM = (
     "You are grading one candidate explanation of an assistant's answer. Below it you are "
@@ -58,7 +72,8 @@ _SYSTEM = (
     "- trace_consistency: it refers only to tool calls and values that appear in the trace. "
     "Subtract for invented calls, numbers, or sources.\n\n"
     'Reply with only JSON: {"faithfulness": n, "completeness": n, "trace_consistency": n}\n'
-    "Output that JSON object and nothing else. Do not explain or justify your scores."
+    "Do not write out your deliberation. If you reason first, keep it under 80 words, then "
+    "emit the JSON. The JSON object must be the last thing you write."
 )
 
 
@@ -84,7 +99,7 @@ def _parse_scores(text: str | None) -> dict | None:
                 return {c: float(parsed[c]) for c in CRITERIA}
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 continue
-    return None
+    return _parse_prose(text)
 
 
 def _has_distractor(row: dict) -> bool:
@@ -192,6 +207,10 @@ def run_c2(config: Config, client: HFClient | None = None) -> None:
                         out_rows.append({
                             "id": row_id, "task_name": task_name, "setup_id": setup_id,
                             "model": config.model, "scores": None,
+                            # whatever did parse is kept so a later re-parse only has to
+                            # recover the missing arm instead of the whole row
+                            "partial_scores": scores or None,
+                            "has_distractor": _has_distractor(row),
                             "order": order, "judge_calls": calls,
                         })
                         continue
