@@ -81,4 +81,6 @@ step_c:
   b1_top_k: 10              # highest-relevance prompt tokens kept as spans
   b2_causal_threshold: 0.5  # patching score at which a region counts as causal
   judge_max_new_tokens: 4096  # judge deliberates first; 2048 truncated it before the JSON
+  judge_evidence: neutral   # neutral | labelled — 'labelled' reuses C1's CAUSAL/NOT CAUSAL wording
+  c1_audience_note: true    # false lets C1 talk about the experiments (and write verdict headings)
   seed: 42                  # blinding order for the judge

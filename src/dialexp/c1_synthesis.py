@@ -36,19 +36,29 @@ _FINDINGS_TURN = (
     "gave, re-running it with parts of the input changed, to see what actually drove it. "
     "Here is what came back:\n\n{findings}\n\n"
     "Please rely only on what these results confirmed, and if something looks like it should "
-    "have mattered but the results show it did not, say so plainly. Answer as you would to me "
-    "as a customer — I do not know any experiments were run, so do not mention them."
+    "have mattered but the results show it did not, say so plainly."
+)
+# without this the model writes to the experimenter, not the user: "as noted in your
+# experiment", "**What Was Causal:**" — which also hands the judge a ready-made verdict
+_AUDIENCE_NOTE = (
+    " Answer as you would to me as a customer — I do not know any experiments were run, "
+    "so do not mention them."
 )
 _ACK = "Understood."
 
 
-def _messages(base: dict, row: dict, question: str) -> list[dict]:
+def _findings_turn(row: dict, audience_note: bool) -> str:
+    text = _FINDINGS_TURN.format(findings=render_evidence(row))
+    return text + _AUDIENCE_NOTE if audience_note else text
+
+
+def _messages(base: dict, row: dict, question: str, audience_note: bool = True) -> list[dict]:
     """`question` is the ask-why prompt verbatim and stays the final turn, so the arms
     differ only in the findings turn that precedes it."""
     return [
         *base["messages"],
         {"role": "assistant", "content": base.get("response") or row.get("answer") or ""},
-        {"role": "user", "content": _FINDINGS_TURN.format(findings=render_evidence(row))},
+        {"role": "user", "content": _findings_turn(row, audience_note)},
         {"role": "assistant", "content": _ACK},
         {"role": "user", "content": question},
     ]
@@ -65,6 +75,7 @@ def run_c1(config: Config, client: HFClient | None = None) -> None:
             config.model, dtype=config.dtype, device=config.device, decoding=config.decoding,
         )
     question = config.ask_why["prompt"]
+    audience_note = bool(config.step_c.get("c1_audience_note", True))
 
     for task_name in config.tasks:
         for setup_id in config.setups:
@@ -94,7 +105,7 @@ def run_c1(config: Config, client: HFClient | None = None) -> None:
                         logger.warning("SKIP id=%s (%s/%s): no Step A row to replay",
                                        row["id"], task_name, setup_id)
                         continue
-                    messages = _messages(base, row, question)
+                    messages = _messages(base, row, question, audience_note)
                     result = client.chat(messages=messages)
                     out_rows.append({
                         "id": row["id"],
@@ -102,6 +113,7 @@ def run_c1(config: Config, client: HFClient | None = None) -> None:
                         "setup_id": setup_id,
                         "model": config.model,
                         "sources": row.get("sources"),
+                        "audience_note": audience_note,
                         "explanation": result.content,
                         "explanation_cot": result.reasoning,
                         "finish_reason": getattr(result, "finish_reason", None),

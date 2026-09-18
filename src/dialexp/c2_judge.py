@@ -33,7 +33,7 @@ import re
 from pathlib import Path
 
 from dialexp.config import Config
-from dialexp.evidence import render_evidence_neutral
+from dialexp.evidence import render_evidence, render_evidence_neutral
 from dialexp.hf_client import HFClient
 from dialexp.significance import paired_bootstrap
 
@@ -77,13 +77,15 @@ _SYSTEM = (
 )
 
 
-def _judge_prompt(row: dict, text: str) -> str:
+def _judge_prompt(row: dict, text: str, labelled: bool = False) -> str:
     trace = [f"User's question: {row.get('question')}", f"Assistant's answer: {row.get('answer')}"]
     for call in row.get("tool_calls") or []:
         trace.append(f"Tool call: {call.get('name')}({call.get('arguments')}) -> {call.get('result')}")
+    findings = render_evidence(row) if labelled else render_evidence_neutral(row)
+    header = "VERIFIED CAUSAL FINDINGS" if labelled else "EXPERIMENT RESULTS"
     return (
         "TRACE\n" + "\n".join(trace)
-        + "\n\nEXPERIMENT RESULTS\n" + render_evidence_neutral(row)
+        + f"\n\n{header}\n" + findings
         + f"\n\nEXPLANATION\n{text}\n\nScore it now."
     )
 
@@ -144,6 +146,8 @@ def run_c2(config: Config, client: HFClient | None = None) -> None:
     seed = config.step_c.get("seed", 42)
     # the judge deliberates before answering; too small a budget truncates it before the JSON
     judge_options = {"max_new_tokens": config.step_c.get("judge_max_new_tokens", 4096)}
+    # "labelled" hands the judge the same CAUSAL/NOT CAUSAL wording C1 saw; for ablation only
+    labelled = config.step_c.get("judge_evidence", "neutral") == "labelled"
 
     judged_all: list[dict] = []
     for task_name in config.tasks:
@@ -182,7 +186,7 @@ def run_c2(config: Config, client: HFClient | None = None) -> None:
 
                     scores, calls = {}, {}
                     for arm in order:
-                        prompt = _judge_prompt(row, texts[arm])
+                        prompt = _judge_prompt(row, texts[arm], labelled)
                         result = client.chat(messages=[
                             {"role": "system", "content": _SYSTEM},
                             {"role": "user", "content": prompt},
