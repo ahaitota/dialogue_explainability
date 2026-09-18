@@ -39,11 +39,14 @@ _FINDINGS_TURN = (
     "have mattered but the results show it did not, say so plainly."
 )
 # without this the model writes to the experimenter, not the user: "as noted in your
-# experiment", "**What Was Causal:**" — which also hands the judge a ready-made verdict
-_AUDIENCE_NOTE = (
-    " Answer as you would to me as a customer — I do not know any experiments were run, "
-    "so do not mention them."
-)
+# experiment", "**What Was Causal:**" — which also hands the judge a ready-made verdict.
+# Each variant names only what that arm was actually shown.
+_AUDIENCE_NOTES = {
+    "evidence": (" Answer as you would to me as a customer — I do not know any experiments "
+                 "were run, so do not mention them."),
+    "reasoning": (" Answer as you would to me as a customer — I have not seen that working, "
+                  "so do not refer to it."),
+}
 _ACK = "Understood."
 
 # control arm: the model's own Step A reasoning instead of the verified findings. Same
@@ -59,12 +62,12 @@ _REASONING_TURN = (
 
 def _findings_turn(row: dict, audience_note: bool) -> str:
     text = _FINDINGS_TURN.format(findings=render_evidence(row))
-    return text + _AUDIENCE_NOTE if audience_note else text
+    return text + _AUDIENCE_NOTES["evidence"] if audience_note else text
 
 
 def _reasoning_turn(base: dict, audience_note: bool) -> str:
     text = _REASONING_TURN.format(reasoning=(base.get("cot") or "").strip())
-    return text + _AUDIENCE_NOTE if audience_note else text
+    return text + _AUDIENCE_NOTES["reasoning"] if audience_note else text
 
 
 def _messages(base: dict, row: dict, question: str, audience_note: bool = True,
