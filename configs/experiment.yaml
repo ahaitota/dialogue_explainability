@@ -83,4 +83,6 @@ step_c:
   judge_max_new_tokens: 4096  # judge deliberates first; 2048 truncated it before the JSON
   judge_evidence: neutral   # neutral | labelled — 'labelled' reuses C1's CAUSAL/NOT CAUSAL wording
   c1_audience_note: true    # false lets C1 talk about the experiments (and write verdict headings)
+  c1_source: evidence       # evidence | reasoning — 'reasoning' shows Step A's own trace instead
+                            # (control: is the causal pipeline better than a memory aid?)
   seed: 42                  # blinding order for the judge

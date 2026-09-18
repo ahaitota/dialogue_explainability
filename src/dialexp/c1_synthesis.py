@@ -46,19 +46,37 @@ _AUDIENCE_NOTE = (
 )
 _ACK = "Understood."
 
+# control arm: the model's own Step A reasoning instead of the verified findings. Same
+# shape, so the only difference from the grounded arm is what the injected turn contains.
+# The trace is unverified and may itself be post-hoc, which is what makes it a fair test
+# of whether the interventions buy anything a memory aid would not.
+_REASONING_TURN = (
+    "One more thing before I ask — here is the working you did at the time, before you "
+    "wrote that answer:\n\n{reasoning}\n\n"
+    "Please rely only on what that working actually shows."
+)
+
 
 def _findings_turn(row: dict, audience_note: bool) -> str:
     text = _FINDINGS_TURN.format(findings=render_evidence(row))
     return text + _AUDIENCE_NOTE if audience_note else text
 
 
-def _messages(base: dict, row: dict, question: str, audience_note: bool = True) -> list[dict]:
+def _reasoning_turn(base: dict, audience_note: bool) -> str:
+    text = _REASONING_TURN.format(reasoning=(base.get("cot") or "").strip())
+    return text + _AUDIENCE_NOTE if audience_note else text
+
+
+def _messages(base: dict, row: dict, question: str, audience_note: bool = True,
+              source: str = "evidence") -> list[dict]:
     """`question` is the ask-why prompt verbatim and stays the final turn, so the arms
-    differ only in the findings turn that precedes it."""
+    differ only in the injected turn that precedes it."""
+    injected = (_reasoning_turn(base, audience_note) if source == "reasoning"
+                else _findings_turn(row, audience_note))
     return [
         *base["messages"],
         {"role": "assistant", "content": base.get("response") or row.get("answer") or ""},
-        {"role": "user", "content": _findings_turn(row, audience_note)},
+        {"role": "user", "content": injected},
         {"role": "assistant", "content": _ACK},
         {"role": "user", "content": question},
     ]
@@ -76,6 +94,7 @@ def run_c1(config: Config, client: HFClient | None = None) -> None:
         )
     question = config.ask_why["prompt"]
     audience_note = bool(config.step_c.get("c1_audience_note", True))
+    source = config.step_c.get("c1_source", "evidence")
 
     for task_name in config.tasks:
         for setup_id in config.setups:
@@ -105,7 +124,11 @@ def run_c1(config: Config, client: HFClient | None = None) -> None:
                         logger.warning("SKIP id=%s (%s/%s): no Step A row to replay",
                                        row["id"], task_name, setup_id)
                         continue
-                    messages = _messages(base, row, question, audience_note)
+                    if source == "reasoning" and not (base.get("cot") or "").strip():
+                        logger.warning("SKIP id=%s (%s/%s): no saved reasoning to show",
+                                       row["id"], task_name, setup_id)
+                        continue
+                    messages = _messages(base, row, question, audience_note, source)
                     result = client.chat(messages=messages)
                     out_rows.append({
                         "id": row["id"],
