@@ -137,6 +137,7 @@ def run_c1(config: Config, client: HFClient | None = None) -> None:
                         "model": config.model,
                         "sources": row.get("sources"),
                         "audience_note": audience_note,
+                        "c1_source": source,
                         "explanation": result.content,
                         "explanation_cot": result.reasoning,
                         "finish_reason": getattr(result, "finish_reason", None),
