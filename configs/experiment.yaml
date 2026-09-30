@@ -23,7 +23,7 @@ dev_size: 10
 
 decoding:
   temperature: 0.0                # greedy
-  max_new_tokens: 2048
+  max_new_tokens: 4096            # covers reasoning + answer; 2048 cut off 3 of 60 mid-answer
   repetition_penalty: 1.2         # >1 discourages repeats; deterministic, breaks loops
 
 max_tool_iterations: 10

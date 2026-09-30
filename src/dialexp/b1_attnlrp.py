@@ -12,7 +12,8 @@ Caveats:
 - One combined backward pass (not one per token) for speed under gradient
   checkpointing; causal masking makes the region-fraction split exact anyway.
 - `target: "value"` restricts attribution to the located parsed_answer span
-  instead of the whole answer.
+  instead of the whole answer. An empty answer has no such span, so it targets the
+  first sentence stating the negative (`target_mode: negative_sentence`).
 
 Reads results/step_a/<task>-<model>-<setup>.jsonl; writes
 results/attnlrp/<task>-<model>-<setup>.jsonl.
@@ -22,6 +23,7 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+import re
 from pathlib import Path
 
 from dialexp.config import Config
@@ -29,6 +31,13 @@ from dialexp.config import Config
 logger = logging.getLogger(__name__)
 
 _DTYPES = {"bfloat16": "bfloat16", "float16": "float16", "float32": "float32"}
+# an empty answer ("no restaurant is open") has no value to point at, so B1 targets
+# the sentence that states it instead — the counterpart of the list of names
+_SENTENCE_RE = re.compile(r"[^.!?\n]+[.!?]?")
+_NEGATION_RE = re.compile(
+    r"\b(no|none|not|nothing|nobody|neither|nor|cannot|can't|don't|doesn't|isn't|aren't|"
+    r"won't|wouldn't|closed|unfortunately)\b", re.I,
+)
 
 
 def _load_rows(path: Path) -> list[dict]:
@@ -93,6 +102,16 @@ def _locate_answer_span(response: str, parsed_answer) -> tuple[int, int] | None:
     if not spans:
         return None
     return min(s[0] for s in spans), max(s[1] for s in spans)
+
+
+def _locate_negative_span(response: str) -> tuple[int, int] | None:
+    """Char span of the first sentence that states a negative, or None."""
+    text = response.replace("\u2019", "'")
+    for match in _SENTENCE_RE.finditer(text):
+        if _NEGATION_RE.search(match.group()):
+            start = match.start() + len(match.group()) - len(match.group().lstrip())
+            return start, match.end()
+    return None
 
 
 def _char_span_to_token_span(offsets, char_start: int, char_end: int) -> tuple[int, int] | None:
@@ -173,6 +192,7 @@ def _attribute_example(
     answer_positions = list(range(answer_start, full_ids.shape[1]))
 
     value_start = value_end = None
+    target_mode = target
     if target == "value":
         if row.get("finish_reason") == "length":
             logger.warning("SKIP id=%s: response truncated, no clean final answer to locate", row.get("id"))
@@ -180,7 +200,11 @@ def _attribute_example(
         if offsets is None:
             logger.warning("SKIP id=%s: no char offsets (slow tokenizer) — can't locate value span", row.get("id"))
             return None
-        span = _locate_answer_span(response, row.get("parsed_answer"))
+        if row.get("parsed_answer") == []:
+            target_mode = "negative_sentence"
+            span = _locate_negative_span(response)
+        else:
+            span = _locate_answer_span(response, row.get("parsed_answer"))
         if span is None:
             logger.warning("SKIP id=%s: parsed_answer missing or not found in response text", row.get("id"))
             return None
@@ -232,6 +256,7 @@ def _attribute_example(
         "n_reasoning_tokens": reasoning_len,
         "n_answer_tokens": len(answer_positions),
         "n_explained": n,
+        "target_mode": target_mode,
         "value_start": value_start,
         "value_end": value_end,
         "mean_reasoning_relevance": mean_reasoning,
