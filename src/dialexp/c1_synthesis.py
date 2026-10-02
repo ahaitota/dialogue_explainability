@@ -40,12 +40,12 @@ _FINDINGS_TURN = (
 )
 # without this the model writes to the experimenter, not the user: "as noted in your
 # experiment", "**What Was Causal:**" — which also hands the judge a ready-made verdict.
-# Phrased as a terse directive rather than first person: an earlier conversational version
-# ("I do not know any experiments were run") was quoted back verbatim in 5 of 39 rows
-# instead of being obeyed. Each variant names only what that arm was actually shown.
+# Rewording the evidence note as a terse directive did not reduce it being quoted back
+# (5 of 39 either way), so the original wording is kept. Each variant names only what
+# that arm was actually shown.
 _AUDIENCE_NOTES = {
-    "evidence": (" Reply with the explanation only, addressed to the customer, and without "
-                 "referring to these test results."),
+    "evidence": (" Answer as you would to me as a customer — I do not know any experiments "
+                 "were run, so do not mention them."),
     "reasoning": (" Reply with the explanation only, addressed to the customer, and without "
                   "referring to these notes."),
 }
