@@ -46,8 +46,8 @@ _FINDINGS_TURN = (
 _AUDIENCE_NOTES = {
     "evidence": (" Answer as you would to me as a customer — I do not know any experiments "
                  "were run, so do not mention them."),
-    "reasoning": (" Reply with the explanation only, addressed to the customer, and without "
-                  "referring to these notes."),
+    "reasoning": (" Answer as you would to me as a customer — I have not seen that working, "
+                  "so do not refer to it."),
 }
 _ACK = "Understood."
 
@@ -56,9 +56,9 @@ _ACK = "Understood."
 # The trace is unverified and may itself be post-hoc, which is what makes it a fair test
 # of whether the interventions buy anything a memory aid would not.
 _REASONING_TURN = (
-    "One more thing before I ask — here are the notes you made while working it out, before "
-    "you wrote that answer:\n\n{reasoning}\n\n"
-    "Please rely only on what those notes actually show."
+    "One more thing before I ask — here is the working you did at the time, before you "
+    "wrote that answer:\n\n{reasoning}\n\n"
+    "Please rely only on what that working actually shows."
 )
 
 
